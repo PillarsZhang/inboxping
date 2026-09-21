@@ -144,6 +144,16 @@ uv run inboxping serve --reload
 打开 <http://127.0.0.1:8000>。监听地址和端口来自 `config.yaml` 的 `web.host` 与 `web.port`。
 首页和邮件详情使用 Bootstrap、Bootstrap Icons 与 Alpine.js，通过同源 JSON API 动态加载；筛选、分页、刷新、重新分析和重新推送均无需整页刷新。前端依赖固定版本并随应用本地提供，不依赖公网 CDN，也不需要 Node 构建环境。API 文档位于 <http://127.0.0.1:8000/docs>，主要端点如下：
 
+仓库中的前端静态依赖可以通过辅助脚本校验，或按固定版本重新下载。脚本会校验 SHA-256，只有所有文件通过后才替换现有资源：
+
+```bash
+# 只校验当前文件，不联网
+uv run python scripts/vendor_web_assets.py --check
+
+# 重新下载 Bootstrap、Bootstrap Icons、Alpine.js 及其许可证
+uv run python scripts/vendor_web_assets.py
+```
+
 ```text
 GET  /api/v1/overview
 GET  /api/v1/accounts
