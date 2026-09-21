@@ -2,8 +2,9 @@ services:
   inboxping:
     build: .
     image: inboxping:latest
-    # 与宿主机共享配置和 SQLite 文件，避免容器生成裸机用户无法维护的数据。
-    user: "${INBOXPING_UID:-1000}:${INBOXPING_GID:-1000}"
+    # rootless Docker 下不要指定 user：容器 UID 0 会映射为宿主机当前普通用户，
+    # 可直接读写 ./data。如改用 rootful Docker，可按宿主机账户启用下面一行：
+    # user: "1000:1000"
     restart: unless-stopped
     ports:
       - "127.0.0.1:8000:8000"

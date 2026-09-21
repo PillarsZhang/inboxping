@@ -182,18 +182,13 @@ uv run inboxping serve --log-level TRACE 2>&1 | tee logs/inboxping-latest.log
 
 ## Docker Compose
 
-Compose 默认以宿主机常见的 `1000:1000` 身份运行，使容器与裸机可以共同读写配置和 SQLite 数据。如果当前用户不是这个 UID/GID，请显式指定：
-
 ```bash
-INBOXPING_UID="$(id -u)" INBOXPING_GID="$(id -g)" docker compose up -d --build
-```
-
-```bash
+mkdir -p data
 docker compose up -d --build
 docker compose logs -f --tail=200
 ```
 
-Compose 将 `config.yaml` 和 `prompts/` 只读挂载进容器，数据保存在 `./data`。宿主机端口默认只绑定 `127.0.0.1`；需要远程访问时，请通过可信反向代理、Tailscale 或 Tunnel 提供 TLS 和访问控制。
+Compose 将 `config.yaml` 和 `prompts/` 只读挂载进容器，数据保存在 `./data`。镜像保持容器 UID `0`，在 rootless Docker 中会映射为宿主机当前普通用户，便于读写挂载数据。宿主机端口默认只绑定 `127.0.0.1`；需要远程访问时，请通过可信反向代理、Tailscale 或 Tunnel 提供 TLS 和访问控制。
 
 ## 安全生成界面截图
 
