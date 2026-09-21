@@ -27,11 +27,15 @@ def test_dashboard_and_health(tmp_path) -> None:
         assert dashboard.status_code == 200
         assert "InboxPing" in dashboard.text
         assert "邮件首页" in dashboard.text
-        assert "/static/style.css?v=" in dashboard.text
-        assert "/static/dashboard.js?v=" in dashboard.text
-        assert "/static/vendor/bootstrap/bootstrap.min.css?v=5.3.8" in dashboard.text
-        assert "/static/vendor/bootstrap-icons/bootstrap-icons.min.css?v=1.13.1" in dashboard.text
-        assert "/static/vendor/alpine/alpine.min.js?v=3.15.12" in dashboard.text
+        assert 'href="/static/style.css?v=' in dashboard.text
+        assert 'src="/static/dashboard.js?v=' in dashboard.text
+        assert 'href="/static/vendor/bootstrap/bootstrap.min.css?v=5.3.8"' in dashboard.text
+        assert (
+            'href="/static/vendor/bootstrap-icons/bootstrap-icons.min.css?v=1.13.1"'
+            in dashboard.text
+        )
+        assert 'src="/static/vendor/alpine/alpine.min.js?v=3.15.12"' in dashboard.text
+        assert "http://testserver/static/" not in dashboard.text
         assert 'x-data="dashboardPage()"' in dashboard.text
         assert 'x-show.important="error"' in dashboard.text
         assert "每页" in dashboard.text
