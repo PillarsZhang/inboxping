@@ -1,0 +1,9 @@
+将以下邮件正文翻译为简体中文：
+
+主题：{subject}
+发件人：{sender_name} <{sender_address}>
+正文开始：
+---
+{body}
+---
+正文结束。

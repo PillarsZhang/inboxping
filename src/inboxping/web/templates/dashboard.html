@@ -1,0 +1,203 @@
+{% extends "base.html" %}
+{% block content %}
+<div x-data="dashboardPage()" x-init="init()" x-cloak>
+  <div class="d-flex flex-column flex-sm-row align-items-sm-end justify-content-between gap-3 mb-4">
+    <div>
+      <h1 class="display-6 fw-bold mb-0">邮件首页</h1>
+    </div>
+    <button class="btn btn-outline-primary align-self-start" type="button" @click="refresh" :disabled="loadingOverview || loadingMessages">
+      <span class="spinner-border spinner-border-sm me-1" x-show="loadingOverview || loadingMessages" aria-hidden="true"></span>
+      <i class="bi bi-arrow-clockwise me-1" x-show="!loadingOverview && !loadingMessages" aria-hidden="true"></i>刷新
+    </button>
+  </div>
+
+  <div class="alert alert-danger d-flex align-items-center" role="alert" x-show.important="error">
+    <i class="bi bi-exclamation-circle-fill me-2" aria-hidden="true"></i><span x-text="error"></span>
+  </div>
+
+  <section aria-label="运行概览">
+    <div class="row g-3 row-cols-2 row-cols-lg-5">
+      <template x-for="item in [
+        { label: '邮件总数', value: overview?.stats.total, icon: 'bi-envelope' },
+        { label: '待分析', value: overview?.stats.pending, icon: 'bi-hourglass-split' },
+        { label: '降级分析', value: overview?.stats.fallback, icon: 'bi-cloud-slash' },
+        { label: 'AI', value: overview?.services.ai_enabled ? '已启用' : '未启用', icon: 'bi-stars' },
+        { label: '通知', value: overview?.services.notifications_enabled ? '已启用' : '未启用', icon: 'bi-send' },
+      ]" :key="item.label">
+        <div class="col">
+          <div class="card metric-card h-100">
+            <div class="card-body">
+              <div class="metric-icon"><i class="bi" :class="item.icon" aria-hidden="true"></i></div>
+              <div class="metric-value" x-text="loadingOverview ? '加载中' : item.value"></div>
+              <div class="text-secondary small" x-text="item.label"></div>
+            </div>
+          </div>
+        </div>
+      </template>
+    </div>
+  </section>
+
+  <section class="app-section">
+    <div class="d-flex align-items-center justify-content-between mb-3">
+      <h2 class="h4 mb-0">邮箱账户</h2>
+    </div>
+    <div class="row g-3 row-cols-1 row-cols-lg-2" x-show="overview?.accounts.length">
+      <template x-for="accountItem in overview?.accounts || []" :key="accountItem.id">
+        <div class="col">
+          <article class="card account-card h-100">
+            <div class="card-body">
+              <div class="d-flex align-items-start justify-content-between gap-3">
+                <div class="min-w-0">
+                  <h3 class="h6 fw-bold text-truncate mb-1" x-text="accountItem.name"></h3>
+                  <a class="account-address" :href="`mailto:${accountItem.username}`" x-text="accountItem.username || '未配置邮箱地址'"></a>
+                  <p class="text-secondary small mt-1 mb-0"><span x-text="accountItem.id"></span> · <span x-text="accountItem.protocol"></span></p>
+                </div>
+                <span class="status-pill" :class="`status-${accountItem.status}`" x-text="accountStatus(accountItem.status)"></span>
+              </div>
+              <div class="account-meta mt-3">
+                <span><i class="bi bi-link-45deg" aria-hidden="true"></i><span x-text="accountItem.last_connected_at ? `${formatDate(accountItem.last_connected_at)} UTC+08:00` : '尚未连接'"></span></span>
+                <span><i class="bi bi-hash" aria-hidden="true"></i>UID <span x-text="accountItem.last_uid"></span></span>
+              </div>
+              <p class="text-danger small mt-3 mb-0" x-show="accountItem.last_error" x-text="accountItem.last_error"></p>
+            </div>
+          </article>
+        </div>
+      </template>
+    </div>
+    <div class="empty-state" x-show="!loadingOverview && !overview?.accounts.length">
+      <i class="bi bi-inbox" aria-hidden="true"></i><p>尚未配置邮箱账户</p>
+    </div>
+  </section>
+
+  <section class="app-section">
+    <h2 class="h4 mb-3">分析与通知</h2>
+    <div class="row g-3 row-cols-1 row-cols-lg-2">
+      <div class="col">
+        <article class="card service-card h-100">
+          <div class="card-body">
+            <div class="d-flex align-items-start justify-content-between gap-3">
+              <div class="service-heading"><span class="service-icon service-icon-ai"><i class="bi bi-stars" aria-hidden="true"></i></span><div><h3 class="h6 fw-bold mb-1">AI 分析</h3><p class="text-secondary small mb-0">邮件理解、摘要与风险判断</p></div></div>
+              <span class="status-pill" :class="overview?.services.ai_enabled ? 'status-connected' : 'status-disabled'" x-text="overview?.services.ai_enabled ? '已启用' : '未启用'"></span>
+            </div>
+            <dl class="service-details mb-0 mt-3">
+              <div><dt>模型</dt><dd x-text="overview?.services.ai_model || '未配置'"></dd></div>
+              <div><dt>接口</dt><dd x-text="overview?.services.ai_base_url || '未配置'"></dd></div>
+              <div><dt>输出</dt><dd x-text="overview?.services.ai_response_format || '未配置'"></dd></div>
+            </dl>
+          </div>
+        </article>
+      </div>
+      <div class="col">
+        <article class="card service-card h-100">
+          <div class="card-body">
+            <div class="d-flex align-items-start justify-content-between gap-3">
+              <div class="service-heading"><span class="service-icon service-icon-notify"><i class="bi bi-send" aria-hidden="true"></i></span><div><h3 class="h6 fw-bold mb-1">通知服务</h3><p class="text-secondary small mb-0">将重要邮件发送到指定通道</p></div></div>
+              <span class="status-pill" :class="overview?.services.notifications_enabled ? 'status-connected' : 'status-disabled'" x-text="overview?.services.notifications_enabled ? '已启用' : '未启用'"></span>
+            </div>
+            <dl class="service-details mb-0 mt-3">
+              <div><dt>默认通道</dt><dd x-text="overview?.services.notification_channels.length ? overview.services.notification_channels.join('、') : '未配置'"></dd></div>
+              <div><dt>通道数量</dt><dd x-text="overview?.services.notification_channels.length || 0"></dd></div>
+            </dl>
+          </div>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="app-section" id="mail-section">
+    <div class="d-flex flex-column flex-xl-row align-items-xl-end justify-content-between gap-3 mb-3">
+      <div>
+        <h2 class="h4 mb-1">邮件</h2>
+        <p class="text-secondary small mb-0" x-text="loadingMessages ? '正在加载邮件' : `共 ${total} 封，当前显示 ${pageStart}–${pageEnd}`"></p>
+      </div>
+      <form class="filter-bar" @submit.prevent="applyFilters">
+        <select class="form-select form-select-sm" aria-label="邮箱账户" x-model="account">
+          <option value="">全部账户</option>
+          <template x-for="accountItem in overview?.accounts || []" :key="accountItem.id">
+            <option :value="accountItem.id" x-text="accountItem.name"></option>
+          </template>
+        </select>
+        <select class="form-select form-select-sm" aria-label="风险等级" x-model="risk">
+          <option value="">全部风险</option><option value="high">高风险</option><option value="medium">中风险</option><option value="low">低风险</option><option value="unknown">风险未知</option>
+        </select>
+        <button class="btn btn-primary btn-sm" type="submit"><i class="bi bi-funnel me-1" aria-hidden="true"></i>筛选</button>
+        <button class="btn btn-sm" :class="pushOnly ? 'btn-success' : 'btn-outline-secondary'" type="button" @click="togglePush"><i class="bi bi-send-check me-1" aria-hidden="true"></i>推送</button>
+        <button class="btn btn-link btn-sm text-secondary text-decoration-none" type="button" @click="clearFilters">清除</button>
+      </form>
+    </div>
+
+    <div class="card mail-card" :class="{ 'mail-card-loading': loadingMessages && messages.length }" :aria-busy="loadingMessages">
+      <div class="mail-loading-indicator" x-show="loadingMessages && messages.length"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span>正在加载</div>
+      <div class="loading-state" x-show="loadingMessages && !messages.length"><span class="spinner-border text-primary" aria-hidden="true"></span><span>正在加载邮件</span></div>
+      <div class="empty-state" x-show="!loadingMessages && !messages.length"><i class="bi bi-inbox" aria-hidden="true"></i><p>当前条件下没有邮件</p></div>
+      <div class="list-group list-group-flush" x-show="messages.length">
+        <template x-for="mail in messages" :key="mail.id">
+          <article class="list-group-item mail-item" :class="{ 'mail-item-push': mail.should_push }">
+            <div class="mail-time">
+              <time x-text="formatDate(mail.displayed_at).slice(5)"></time>
+              <span class="text-secondary" x-text="mail.account_id"></span>
+            </div>
+            <div class="mail-identity">
+              <span class="field-label">发件人</span>
+              <strong class="mail-sender" x-text="mail.sender_name || mail.sender_address || '未记录'"></strong>
+              <span class="mail-address" x-show="mail.sender_name && mail.sender_address" x-text="mail.sender_address"></span>
+              <span class="field-label mt-2">收件人</span>
+              <span class="mail-address clamp-2" x-text="mail.recipients || '未记录'"></span>
+            </div>
+            <div class="mail-copy">
+              <span class="analysis-title" x-show="mail.analysis?.title" x-text="mail.analysis?.title"></span>
+              <a class="mail-subject" :href="`/messages/${mail.id}`" x-text="mail.subject"></a>
+              <p x-text="mail.analysis?.summary || (mail.status === 'pending' ? '等待分析' : '尚无分析结果')"></p>
+            </div>
+            <div class="mail-flags">
+              <span class="fw-bold" x-text="mail.analysis ? `${Math.round(mail.analysis.importance * 100)}%` : '待分析'"></span>
+              <span class="risk-pill" :class="`risk-${mail.analysis?.risk_level || 'pending'}`" x-text="mail.analysis ? riskLabel(mail.analysis.risk_level) : '待分析'"></span>
+              <span class="push-pill" x-show="mail.should_push"><i class="bi bi-send-check" aria-hidden="true"></i>推送</span>
+            </div>
+          </article>
+        </template>
+      </div>
+    </div>
+
+    <nav class="pagination-bar mt-3" aria-label="邮件分页" x-show="total > 0">
+      <div class="d-flex align-items-center gap-2">
+        <label class="text-secondary small" for="page-size">每页</label>
+        <select class="form-select form-select-sm page-size-select" id="page-size" x-model.number="pageSize" @change="changePageSize">
+          <option :value="20">20</option><option :value="50">50</option><option :value="100">100</option>
+        </select>
+        <span class="text-secondary small">封</span>
+      </div>
+      <div class="d-flex align-items-center gap-2">
+        <span class="text-secondary small me-1" x-text="`第 ${currentPage} / ${pageCount} 页`"></span>
+        <div class="btn-group btn-group-sm" role="group" aria-label="切换页码">
+          <button class="btn btn-outline-secondary" type="button" title="首页" aria-label="首页" @click="goToPage(1)" :disabled="currentPage === 1"><i class="bi bi-chevron-bar-left" aria-hidden="true"></i></button>
+          <button class="btn btn-outline-secondary" type="button" title="上一页" aria-label="上一页" @click="changePage(-1)" :disabled="currentPage === 1"><i class="bi bi-chevron-left" aria-hidden="true"></i></button>
+          <template x-for="page in visiblePages" :key="page">
+            <button class="btn" :class="page === currentPage ? 'btn-primary' : 'btn-outline-secondary'" type="button" @click="goToPage(page)" :aria-current="page === currentPage ? 'page' : null" x-text="page"></button>
+          </template>
+          <button class="btn btn-outline-secondary" type="button" title="下一页" aria-label="下一页" @click="changePage(1)" :disabled="currentPage === pageCount"><i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+          <button class="btn btn-outline-secondary" type="button" title="末页" aria-label="末页" @click="goToPage(pageCount)" :disabled="currentPage === pageCount"><i class="bi bi-chevron-bar-right" aria-hidden="true"></i></button>
+        </div>
+      </div>
+    </nav>
+  </section>
+
+  <section class="app-section">
+    <h2 class="h4 mb-3">最近事件</h2>
+    <div class="card event-card">
+      <div class="card-body empty-state" x-show="!overview?.events.length"><i class="bi bi-check-circle" aria-hidden="true"></i><p>暂无事件</p></div>
+      <div class="list-group list-group-flush" x-show="overview?.events.length">
+        <template x-for="eventItem in overview?.events || []" :key="eventItem.id">
+          <div class="list-group-item event-item">
+            <span class="status-dot" :class="`event-${eventItem.level}`"></span>
+            <time x-text="formatDate(eventItem.created_at)"></time>
+            <span class="text-secondary" x-text="eventItem.account_id || eventItem.kind"></span>
+            <span x-text="eventItem.message"></span>
+          </div>
+        </template>
+      </div>
+    </div>
+  </section>
+</div>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', path='/dashboard.js') }}?v={{ asset_version }}"></script>{% endblock %}

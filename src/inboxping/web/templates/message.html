@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}邮件详情 · InboxPing{% endblock %}
+{% block content %}
+<div x-data="messagePage({{ message_id }})" x-init="init()" x-cloak>
+  <a class="back-link" href="/"><i class="bi bi-house-door me-1" aria-hidden="true"></i>返回首页</a>
+  <div class="alert alert-danger d-flex align-items-center mt-3" role="alert" x-show.important="error"><i class="bi bi-exclamation-circle-fill me-2" aria-hidden="true"></i><span x-text="error"></span></div>
+  <div class="loading-state py-5" x-show="loading"><span class="spinner-border text-primary" aria-hidden="true"></span><span>正在加载邮件</span></div>
+
+  <template x-if="message && !loading">
+    <div>
+      <header class="detail-heading">
+        <p class="analysis-title mb-2" x-show="message.analysis?.title" x-text="message.analysis?.title"></p>
+        <h1 class="display-6 fw-bold" x-text="message.subject"></h1>
+        <div class="card mt-4">
+          <dl class="detail-grid card-body mb-0">
+            <div>
+              <dt>发件人</dt>
+              <dd>
+                <strong x-show="message.sender_name" x-text="message.sender_name"></strong>
+                <a class="detail-address" x-show="message.sender_address" :href="`mailto:${message.sender_address}`" x-text="message.sender_address"></a>
+                <span x-show="!message.sender_name && !message.sender_address">未记录</span>
+              </dd>
+            </div>
+            <div><dt>收件人</dt><dd class="detail-address" x-text="message.recipients || '未记录'"></dd></div>
+            <div><dt>发件时间</dt><dd x-text="message.displayed_at ? `${formatDate(message.displayed_at, true)} UTC+08:00` : '未记录'"></dd></div>
+            <div><dt>邮件标识</dt><dd><span x-text="message.account_id"></span> · #<span x-text="message.id"></span></dd></div>
+          </dl>
+        </div>
+      </header>
+
+      <div class="row g-4 mt-1">
+        <div class="col-12 col-xl-5">
+          <section class="card h-100">
+            <div class="card-body">
+              <div class="d-flex justify-content-between align-items-center mb-3"><h2 class="h5 mb-0">推送状态</h2><i class="bi bi-broadcast text-secondary" aria-hidden="true"></i></div>
+              <p class="text-secondary mb-0" x-show="!message.notifications.length">这封邮件没有实际推送记录。</p>
+              <div class="notification-list" x-show="message.notifications.length">
+                <template x-for="notification in message.notifications" :key="notification.channel">
+                  <article class="notification-item">
+                    <div class="d-flex align-items-center justify-content-between gap-2">
+                      <strong x-text="notification.channel"></strong>
+                      <span class="status-pill" :class="`delivery-${notification.status}`" x-text="deliveryLabel(notification.status)"></span>
+                    </div>
+                    <p class="text-secondary small mb-1" x-text="notification.target ? `${notification.channel_type} → ${notification.target}` : notification.channel_type"></p>
+                    <p class="small mb-0"><span x-text="notification.sent_at ? `${formatDate(notification.sent_at, true)} UTC+08:00` : '尚未发送'"></span> · 尝试 <span x-text="notification.attempts"></span> 次</p>
+                    <p class="text-danger small mt-2 mb-0" x-show="notification.last_error" x-text="notification.last_error"></p>
+                  </article>
+                </template>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div class="col-12 col-xl-7">
+          <section class="card analysis-card h-100" x-show="message.analysis">
+            <div class="card-body">
+              <div class="d-flex justify-content-between align-items-center gap-3 mb-3">
+                <h2 class="h5 mb-0">AI 分析</h2>
+                <span class="risk-pill" :class="`risk-${message.analysis?.risk_level}`" x-text="riskLabel(message.analysis?.risk_level)"></span>
+              </div>
+              <p class="analysis-summary" x-text="message.analysis?.summary"></p>
+              <div class="analysis-facts">
+                <span><small>分类</small><strong x-text="message.analysis?.category"></strong></span>
+                <span><small>重要度</small><strong x-text="`${Math.round(message.analysis?.importance * 100)}%`"></strong></span>
+                <span><small>模型</small><strong x-text="message.analysis?.model"></strong></span>
+              </div>
+              <p class="small mt-3 mb-0" x-show="message.analysis?.risk_reason"><strong>风险说明：</strong><span x-text="message.analysis?.risk_reason"></span></p>
+              <p class="small mt-2 mb-0" x-show="message.analysis?.action_required && message.analysis?.action_text"><strong>建议操作：</strong><span x-text="message.analysis?.action_text"></span><span x-show="message.analysis?.deadline" x-text="`（${message.analysis?.deadline}）`"></span></p>
+              <div class="d-flex flex-wrap gap-2 mt-4">
+                <button class="btn btn-primary btn-sm" type="button" @click="runAction('reanalyze')" :disabled="action !== null"><span class="spinner-border spinner-border-sm me-1" x-show="action === 'reanalyze'"></span><i class="bi bi-stars me-1" x-show="action !== 'reanalyze'"></i>重新分析</button>
+                <button class="btn btn-outline-secondary btn-sm" type="button" @click="runAction('notify')" :disabled="action !== null"><span class="spinner-border spinner-border-sm me-1" x-show="action === 'notify'"></span><i class="bi bi-send me-1" x-show="action !== 'notify'"></i>重新推送</button>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+
+      <section class="app-section">
+        <div class="d-flex align-items-center justify-content-between gap-3 mb-3">
+          <h2 class="h4 mb-0">正文</h2>
+          <div class="d-flex flex-wrap justify-content-end gap-2">
+            <a class="btn btn-outline-secondary btn-sm" :href="`/api/v1/messages/${message.id}/export/original.md`"><i class="bi bi-filetype-md me-1" aria-hidden="true"></i>下载原文</a>
+            <a class="btn btn-outline-secondary btn-sm" :href="`/api/v1/messages/${message.id}/export/eml`" title="从原邮箱只读获取，不在本地保存"><i class="bi bi-envelope-arrow-down me-1" aria-hidden="true"></i>下载 EML</a>
+          </div>
+        </div>
+        <article class="card"><pre class="message-body card-body mb-0" x-text="message.text_body || '没有可显示的正文。'"></pre></article>
+        <div class="d-flex justify-content-end mt-3" x-show="!message.translation">
+          <button class="btn btn-primary" type="button" @click="runTranslation()" :disabled="translating"><span class="spinner-border spinner-border-sm me-1" x-show="translating"></span><i class="bi bi-translate me-1" x-show="!translating"></i><span x-text="translating ? '正在翻译' : '翻译全文'"></span></button>
+        </div>
+      </section>
+
+      <section class="app-section" x-show="message.translation || translating || translationDraft || translationError">
+        <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+          <div>
+            <h2 class="h4 mb-1">中文翻译</h2>
+            <span class="text-secondary small" x-text="translating || translationError ? translationStatus : (message.translation ? `${message.translation.model} · ${formatDate(message.translation.updated_at, true)} UTC+08:00` : '')"></span>
+          </div>
+          <div class="d-flex flex-wrap align-items-center gap-2">
+            <a class="btn btn-outline-secondary btn-sm" x-show="message.translation && !translating" :href="`/api/v1/messages/${message.id}/export/translation.md`"><i class="bi bi-filetype-md me-1" aria-hidden="true"></i>下载翻译</a>
+            <button class="btn btn-outline-primary btn-sm" type="button" x-show="message.translation" @click="runTranslation()" :disabled="translating"><span class="spinner-border spinner-border-sm me-1" x-show="translating"></span><i class="bi bi-arrow-repeat me-1" x-show="!translating"></i>重新翻译</button>
+            <button class="btn btn-outline-danger btn-sm" type="button" @click="deleteTranslation()" :disabled="translating"><i class="bi bi-trash me-1" aria-hidden="true"></i>删除翻译</button>
+          </div>
+        </div>
+        <div class="alert alert-danger" role="alert" x-show="translationError" x-text="translationError"></div>
+        <article class="card" aria-live="polite"><pre class="message-body card-body mb-0" x-text="translationDraft || message.translation?.text || ''"></pre></article>
+      </section>
+    </div>
+  </template>
+</div>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', path='/message.js') }}?v={{ asset_version }}"></script>{% endblock %}

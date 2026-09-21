@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}InboxPing{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='/vendor/bootstrap/bootstrap.min.css') }}?v=5.3.8">
+  <link rel="stylesheet" href="{{ url_for('static', path='/vendor/bootstrap-icons/bootstrap-icons.min.css') }}?v=1.13.1">
+  <link rel="stylesheet" href="{{ url_for('static', path='/style.css') }}?v={{ asset_version }}">
+</head>
+<body>
+<nav class="navbar navbar-dark app-navbar">
+  <div class="container-xl">
+    <a class="navbar-brand fw-bold" href="/">InboxPing</a>
+    {% block navigation %}
+    <div class="d-flex align-items-center gap-3">
+      {% if demo_mode %}<span class="viewer-status"><i class="bi bi-easel" aria-hidden="true"></i>演示模式</span>{% endif %}
+      {% if auth_enabled %}
+      <span class="viewer-status"><i class="bi bi-person-check" aria-hidden="true"></i>已登录：{{ viewer }}</span>
+      {% else %}
+      <span class="viewer-status"><i class="bi bi-unlock" aria-hidden="true"></i>匿名访问</span>
+      {% endif %}
+      <a class="nav-link text-white-50" href="/">首页</a>
+      {% if auth_enabled %}
+      <form action="/logout" method="post">
+        <button class="btn btn-link nav-link text-white-50 p-0" type="submit">退出</button>
+      </form>
+      {% endif %}
+    </div>
+    {% endblock %}
+  </div>
+</nav>
+<main class="container-xl app-main">{% block content %}{% endblock %}</main>
+<footer class="container-xl text-center text-secondary small py-4">InboxPing</footer>
+<script src="{{ url_for('static', path='/common.js') }}?v={{ asset_version }}"></script>
+{% block scripts %}{% endblock %}
+<script defer src="{{ url_for('static', path='/vendor/alpine/alpine.min.js') }}?v=3.15.12"></script>
+</body>
+</html>

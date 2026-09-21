@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}登录 · InboxPing{% endblock %}
+{% block navigation %}{% endblock %}
+{% block content %}
+<section class="login-shell">
+  <div class="card login-card">
+    <div class="card-body p-4 p-sm-5">
+      <div class="login-icon"><i class="bi bi-envelope-paper" aria-hidden="true"></i></div>
+      <h1 class="h3 fw-bold text-center mt-3">登录 InboxPing</h1>
+      <p class="text-secondary text-center mb-4">查看邮件分析与通知状态</p>
+      {% if error %}<div class="alert alert-danger py-2">{{ error }}</div>{% endif %}
+      <form method="post" class="d-grid gap-3">
+        <label class="form-label mb-0">用户名<input class="form-control mt-1" name="username" value="{{ username }}" autocomplete="username" required></label>
+        <label class="form-label mb-0">密码<input class="form-control mt-1" name="password" type="password" autocomplete="current-password" required></label>
+        <button class="btn btn-primary mt-2" type="submit">登录</button>
+      </form>
+    </div>
+  </div>
+</section>
+{% endblock %}

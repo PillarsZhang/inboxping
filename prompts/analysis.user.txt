@@ -1,0 +1,12 @@
+分析以下邮件：
+
+主题：{subject}
+发件人：{sender_name} <{sender_address}>
+收件人：{recipients}
+附件：{attachments}
+发件认证与本地信任：{trust_context}
+正文开始：
+---
+{body}
+---
+正文结束。

@@ -1,0 +1,98 @@
+# InboxPing 配置模板。复制为 config.yaml 后填写其中的秘密。
+web:
+  host: 0.0.0.0
+  port: 8000
+  username: admin
+  # 使用 `uv run inboxping hash-password` 生成。
+  password_hash: ""
+  session_secret: change-me-before-production
+  # 单次登录有效期为 1～400 天；rolling 开启时，每次访问都会重新计时。
+  session_max_age_days: 400
+  session_rolling: true
+
+ai:
+  enabled: true
+  base_url: https://api.deepseek.com
+  api_key: ""
+  model: deepseek-flash
+  response_format: json_object
+  connect_timeout_seconds: 10
+  read_timeout_seconds: 90
+  max_stream_seconds: 600
+  # null 表示不向模型传 temperature，保留服务商默认参数。
+  temperature: null
+
+notifications:
+  # 只有这里列出的通道才会接收自动邮件通知。
+  default_channels: []
+  channels:
+    - id: wecom_app
+      type: wecom_app
+      enabled: false
+      corp_id: ""
+      corp_secret: ""
+      agent_id: 1000001
+      to_user:
+        - "@all"
+
+    - id: wecom_group
+      type: wecom_webhook
+      enabled: false
+      webhook_url: ""
+  retry:
+    max_attempts: 3
+
+mail:
+  accounts:
+    - id: university
+      name: 学校邮箱
+      username: student@example.edu.cn
+      password: ""
+      # 明确选择协议：imap_idle、imap_poll 或 pop3_poll。
+      protocol: imap_poll
+      imap:
+        host: imap.example.edu.cn
+        port: 993
+        folder: INBOX
+        ssl: true
+      enabled: true
+
+    # POP3 兼容示例；启用后依赖 UIDL 去重，绝不执行 DELE。
+    - id: legacy_pop3
+      name: POP3 示例邮箱
+      username: user@example.com
+      password: ""
+      protocol: pop3_poll
+      pop3:
+        host: pop.example.com
+        port: 995
+        ssl: true
+      enabled: false
+
+rules:
+  trusted_senders:
+    - your-personal-address@example.com
+  trusted_domains:
+    - example.edu
+    - example.org
+
+monitor:
+  poll_interval_seconds: 60
+  idle_timeout_seconds: 240
+  initial_sync_limit: 20
+
+analysis:
+  body_max_chars: 20000
+  push_importance_threshold: 0.70
+  # AI 判为这些风险等级时只入库并在 Web 展示，不发送通知。
+  suppress_risk_levels:
+    - medium
+    - high
+  prompt_dir: prompts
+
+storage:
+  database_url: sqlite:///./data/inboxping.db
+
+logging:
+  level: INFO
+  json: false
