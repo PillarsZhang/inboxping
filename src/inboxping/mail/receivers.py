@@ -21,8 +21,9 @@ from inboxping.models import AccountState, Event
 class RawMessage:
     uid: int
     uid_validity: int
-    body: bytes
+    body: bytes | None
     folder: str = "INBOX"
+    size: int = 0
 
 
 class Receiver(Protocol):
@@ -126,17 +127,34 @@ class ImapReceiver:
             )
         messages: list[RawMessage] = []
         if uids:
-            fetched = client.fetch(uids, [b"BODY.PEEK[]"])
+            size_data = client.fetch(uids, [b"RFC822.SIZE"])
             for uid in sorted(uids):
-                data = fetched.get(uid, {})
+                metadata = size_data.get(uid, {})
+                size = int(metadata.get(b"RFC822.SIZE", metadata.get("RFC822.SIZE", 0)))
+                if size > self.settings.monitor.max_message_bytes:
+                    messages.append(
+                        RawMessage(
+                            uid=uid,
+                            uid_validity=self.uid_validity,
+                            body=None,
+                            folder=self.config.folder,
+                            size=size,
+                        )
+                    )
+                    continue
+                data = client.fetch([uid], [b"BODY.PEEK[]"]).get(uid, {})
                 body = data.get(b"BODY[]") or data.get(b"BODY.PEEK[]")
                 if isinstance(body, bytes):
+                    actual_size = len(body)
+                    if actual_size > self.settings.monitor.max_message_bytes:
+                        body = None
                     messages.append(
                         RawMessage(
                             uid=uid,
                             uid_validity=self.uid_validity,
                             body=body,
                             folder=self.config.folder,
+                            size=max(size, actual_size),
                         )
                     )
         if self.account.protocol == "imap_idle" and wait and not messages:
@@ -155,22 +173,32 @@ class ImapReceiver:
             raise RuntimeError(
                 f"UIDVALIDITY 已变化（原 {uid_validity}，当前 {self.uid_validity}），无法可靠补拉"
             )
+        metadata = client.fetch([uid], [b"RFC822.SIZE"]).get(uid, {})
+        size = int(metadata.get(b"RFC822.SIZE", metadata.get("RFC822.SIZE", 0)))
+        if size > self.settings.monitor.max_message_bytes:
+            raise RuntimeError(
+                f"邮件大小 {size} 字节超过配置上限 "
+                f"{self.settings.monitor.max_message_bytes} 字节"
+            )
         fetched = client.fetch([uid], [b"BODY.PEEK[]"])
         data = fetched.get(uid, {})
         body = data.get(b"BODY[]") or data.get(b"BODY.PEEK[]")
         if not isinstance(body, bytes):
             raise RuntimeError(f"原邮箱中找不到 UID {uid}，邮件可能已移动或删除")
+        if len(body) > self.settings.monitor.max_message_bytes:
+            raise RuntimeError("邮件实际大小超过配置上限")
         return body
 
 
 class Pop3Receiver:
     """Read-only POP3 receiver using UIDL as its durable message identity."""
 
-    def __init__(self, account: MailAccount, db: Database, _settings: Settings):
+    def __init__(self, account: MailAccount, db: Database, settings: Settings):
         assert account.pop3 is not None
         self.account = account
         self.config = account.pop3
         self.db = db
+        self.settings = settings
         self.client: poplib.POP3 | poplib.POP3_SSL | None = None
         self.seen: set[str] = set()
         self._pending_seen: set[str] | None = None
@@ -275,17 +303,32 @@ class Pop3Receiver:
         current_uidls = {uidl for _, uidl in entries}
         unseen = [(number, uidl) for number, uidl in entries if uidl not in self.seen]
         selected = unseen[-limit:] if not self._initialized else unseen[:limit]
+        _, size_lines, _ = client.list()
+        sizes = {}
+        for line in size_lines:
+            number, separator, size = line.partition(b" ")
+            if separator and number.isdigit() and size.isdigit():
+                sizes[int(number)] = int(size)
         if selected:
             logger.bind(account=self.account.id, protocol=self.account.protocol).info(
                 "发现 {} 封待拉取邮件", len(selected)
             )
         messages: list[RawMessage] = []
         for number, uidl in selected:
-            _, lines, _ = client.retr(number)
-            body = b"\r\n".join(lines) + b"\r\n"
+            size = sizes.get(number, 0)
             uid = int.from_bytes(hashlib.sha256(uidl.encode()).digest()[:8], "big")
             uid &= 0x7FFF_FFFF_FFFF_FFFF
-            messages.append(RawMessage(uid=uid, uid_validity=0, body=body))
+            if size > self.settings.monitor.max_message_bytes:
+                messages.append(RawMessage(uid=uid, uid_validity=0, body=None, size=size))
+                continue
+            _, lines, _ = client.retr(number)
+            body = b"\r\n".join(lines) + b"\r\n"
+            actual_size = len(body)
+            if actual_size > self.settings.monitor.max_message_bytes:
+                body = None
+            messages.append(
+                RawMessage(uid=uid, uid_validity=0, body=body, size=max(size, actual_size))
+            )
         if self._initialized:
             self._pending_seen = (self.seen & current_uidls) | {uidl for _, uidl in selected}
         else:
@@ -302,8 +345,19 @@ class Pop3Receiver:
             candidate = int.from_bytes(hashlib.sha256(uidl.encode()).digest()[:8], "big")
             candidate &= 0x7FFF_FFFF_FFFF_FFFF
             if candidate == uid:
+                size_response = client.list(number)
+                size_parts = size_response.split()
+                if (
+                    len(size_parts) >= 3
+                    and size_parts[-1].isdigit()
+                    and int(size_parts[-1]) > self.settings.monitor.max_message_bytes
+                ):
+                    raise RuntimeError("邮件大小超过配置上限")
                 _, lines, _ = client.retr(number)
-                return b"\r\n".join(lines) + b"\r\n"
+                body = b"\r\n".join(lines) + b"\r\n"
+                if len(body) > self.settings.monitor.max_message_bytes:
+                    raise RuntimeError("邮件实际大小超过配置上限")
+                return body
         raise RuntimeError("原邮箱中找不到该邮件，邮件可能已被删除")
 
 

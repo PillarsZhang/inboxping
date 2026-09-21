@@ -128,6 +128,26 @@ class MailMonitor:
     def _save_message(
         self, account: MailAccount, raw: RawMessage, *, status: str = "pending"
     ) -> int | None:
+        if raw.body is None:
+            with self.db.session() as session:
+                state = session.get(AccountState, account.id)
+                assert state is not None
+                state.last_uid = max(state.last_uid, raw.uid)
+                session.add(
+                    Event(
+                        level="warning",
+                        kind="mail_skipped",
+                        account_id=account.id,
+                        message=(
+                            f"邮件超过大小上限，已跳过，UID={raw.uid}，"
+                            f"大小={raw.size} 字节"
+                        ),
+                    )
+                )
+            logger.bind(account=account.id, uid=raw.uid).warning(
+                "邮件超过大小上限，已跳过（大小={} 字节）", raw.size
+            )
+            return None
         parsed = parse_message(raw.body, self.settings.analysis.body_max_chars)
         try:
             with self.db.session() as session:

@@ -69,11 +69,19 @@ class AIClient:
         api_key = self.settings.ai.api_key.get_secret_value()
         return {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
+    def _count_output(self, current: int, content: str) -> int:
+        total = current + len(content)
+        limit = self.settings.ai.max_output_chars
+        if total > limit:
+            raise RuntimeError(f"AI 输出超过配置上限（{limit} 字符）")
+        return total
+
     async def _stream_chat(
         self, payload: dict[str, object], *, message_id: int
     ) -> AsyncIterator[str]:
         url = f"{self.settings.ai.base_url.rstrip('/')}/chat/completions"
         stream_payload = {**payload, "stream": True}
+        output_chars = 0
         async with (
             asyncio.timeout(self.settings.ai.max_stream_seconds),
             httpx.AsyncClient(timeout=self._timeout()) as client,
@@ -98,12 +106,14 @@ class AIClient:
                     )
                     continue
                 if isinstance(content, str) and content:
+                    output_chars = self._count_output(output_chars, content)
                     yield content
                 elif isinstance(content, list):
                     text = "".join(
                         item.get("text", "") for item in content if isinstance(item, dict)
                     )
                     if text:
+                        output_chars = self._count_output(output_chars, text)
                         yield text
 
     async def analyze(self, message: Message, prompt: Prompt) -> AnalysisResult:

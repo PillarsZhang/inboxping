@@ -36,6 +36,7 @@ class AIConfig(StrictModel):
     connect_timeout_seconds: float = Field(default=10, gt=0)
     read_timeout_seconds: float = Field(default=90, gt=0)
     max_stream_seconds: float = Field(default=600, gt=0)
+    max_output_chars: int = Field(default=100_000, ge=1000)
     # None means that the provider's default sampling parameters are preserved.
     temperature: float | None = Field(default=None, ge=0, le=2)
 
@@ -151,6 +152,7 @@ class MonitorConfig(StrictModel):
     poll_interval_seconds: int = Field(default=60, ge=5)
     idle_timeout_seconds: int = Field(default=240, ge=30)
     initial_sync_limit: int = Field(default=20, ge=1)
+    max_message_bytes: int = Field(default=25 * 1024 * 1024, ge=1024)
 
 
 class AnalysisConfig(StrictModel):

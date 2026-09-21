@@ -19,6 +19,7 @@ ai:
   connect_timeout_seconds: 10
   read_timeout_seconds: 90
   max_stream_seconds: 600
+  max_output_chars: 100000
   # null 表示不向模型传 temperature，保留服务商默认参数。
   temperature: null
 
@@ -80,6 +81,8 @@ monitor:
   poll_interval_seconds: 60
   idle_timeout_seconds: 240
   initial_sync_limit: 20
+  # 超限邮件不下载正文，仅记录跳过事件（默认 25 MiB）。
+  max_message_bytes: 26214400
 
 analysis:
   body_max_chars: 20000

@@ -30,7 +30,9 @@ def test_example_config_is_valid_and_generic() -> None:
     assert settings.ai.connect_timeout_seconds == 10
     assert settings.ai.read_timeout_seconds == 90
     assert settings.ai.max_stream_seconds == 600
+    assert settings.ai.max_output_chars == 100_000
     assert settings.monitor.poll_interval_seconds == 60
+    assert settings.monitor.max_message_bytes == 25 * 1024 * 1024
 
 
 @pytest.mark.parametrize("days", [0, 401])

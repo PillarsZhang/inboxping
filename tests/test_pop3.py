@@ -33,6 +33,15 @@ class FakePop3:
         lines = body.split(b"\r\n")
         return b"+OK", lines, len(body)
 
+    def list(self, number: int | None = None) -> bytes | tuple[bytes, list[bytes], int]:
+        if number is not None:
+            return f"+OK {number} {len(self.messages[number - 1][1])}".encode()
+        entries = [
+            f"{index} {len(body)}".encode()
+            for index, (_, body) in enumerate(self.messages, 1)
+        ]
+        return b"+OK", entries, sum(map(len, entries))
+
     def quit(self) -> bytes:
         self.closed = True
         return b"+OK"
@@ -41,6 +50,7 @@ class FakePop3:
 def test_pop3_uses_uidl_and_only_fetches_new_mail(tmp_path, monkeypatch) -> None:
     settings = Settings(
         storage={"database_url": f"sqlite:///{tmp_path / 'test.db'}"},
+        monitor={"max_message_bytes": 1024},
         mail={
             "accounts": [
                 {
@@ -84,5 +94,15 @@ def test_pop3_uses_uidl_and_only_fetches_new_mail(tmp_path, monkeypatch) -> None
     assert added[0].body.startswith(b"Subject: four")
     assert fake.retrieved == [2, 3, 2, 4]
     receiver.acknowledge()
+
+    fake.messages.append(("oversized", b"x" * 2048))
+    skipped = receiver.receive(limit=2, wait=False)
+    assert len(skipped) == 1
+    assert skipped[0].body is None
+    assert skipped[0].size == 2048
+    assert fake.retrieved == [2, 3, 2, 4]
+    receiver.acknowledge()
+    assert receiver.receive(limit=2, wait=False) == []
+
     receiver.close()
     assert fake.closed
