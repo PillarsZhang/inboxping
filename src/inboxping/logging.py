@@ -48,6 +48,21 @@ class InterceptHandler(logging.Handler):
         logger.opt(depth=depth, exception=record.exc_info).log(level, record.getMessage())
 
 
+class SuccessfulHealthCheckFilter(logging.Filter):
+    """Suppress routine successful probes while retaining failures for diagnosis."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if not isinstance(args, tuple) or len(args) < 5:
+            return True
+        path = str(args[2]).partition("?")[0]
+        try:
+            status_code = int(args[4])
+        except (TypeError, ValueError):
+            return True
+        return path != "/health/live" or status_code >= 400
+
+
 def configure_logging(settings: Settings) -> None:
     logger.remove()
     sink_options = {
@@ -65,7 +80,12 @@ def configure_logging(settings: Settings) -> None:
     # webhook keys in their query string. Never allow those request lines into logs.
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
-    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+    for name in ("uvicorn", "uvicorn.error"):
         target = logging.getLogger(name)
         target.handlers = [InterceptHandler()]
         target.propagate = False
+    access_handler = InterceptHandler()
+    access_handler.addFilter(SuccessfulHealthCheckFilter())
+    access_logger = logging.getLogger("uvicorn.access")
+    access_logger.handlers = [access_handler]
+    access_logger.propagate = False
