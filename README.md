@@ -10,7 +10,7 @@
 - 多邮箱监听：支持 IMAP IDLE、持久 IMAP 轮询和 POP3 轮询，每个账户显式选择协议。
 - 原邮箱只读：IMAP 使用只读文件夹和 `BODY.PEEK[]`，POP3 不发送 `DELE`，不改变已读状态。
 - AI 邮件理解：输出概括标题、中文摘要、分类、重要度、风险、待办与截止日期。
-- 安全推送策略：风险抑制优先于 AI 的推送建议，疑似钓鱼、病毒或恶意邮件只在 Web 中留存审阅。
+- AI 决定推送：分别评估重要性与风险，并给出是否即时通知及理由；Prompt 要求危险邮件不推送。
 - 可替换 AI：使用 OpenAI-compatible Chat Completions API，模型、接口和 Prompt 都可配置。
 - 流式全文翻译：在邮件详情中边生成边显示中文译文，支持重新翻译、删除翻译和超时反馈。
 - 企业微信通知：支持自建应用和群机器人，按通道去重、记录结果并重试失败投递。
@@ -24,7 +24,7 @@
 
 ![InboxPing 首页概览](docs/images/dashboard-overview.avif)
 
-邮件列表、风险等级、推送决策与最近事件：
+邮件列表、风险分数、推送决策与最近事件：
 
 ![InboxPing 邮件列表](docs/images/dashboard-messages.avif)
 
@@ -105,20 +105,15 @@ Web 会话的两个选项相互独立：`web.session_max_age_days` 设置单次�
 INBOXPING_CONFIG=/etc/inboxping.yaml uv run inboxping doctor
 ```
 
-可信来源保持为两类简单规则：
+AI 会收到邮件的发件人、正文、附件元数据和 SPF/DKIM/DMARC 认证结果。可在 `trust` 中添加已确认的发件地址、发件域名或链接域名；每项只需 `value`，可选 `note` 记录确认依据。命中名单仅供 AI 参考，不自动放行、不覆盖恶意证据，也不能单凭可伪造的发件人地址认定可信。
 
-```yaml
-rules:
-  trusted_senders:
-    - your-personal-address@example.com
-  trusted_domains:
-    - example.edu
-    - example.org
-```
+群发邮件的完整收件人名单仍保存在本地，详情页默认只显示前几位和总人数，需要时可展开；邮件列表 API 只返回概况。AI 分析也只接收人数、少量地址示例与主要域名统计，不会把整份名单放进 Prompt。原文 Markdown 导出仍保留完整收件人信息。
 
-信任规则只辅助风险分析，不会跳过存储或 AI，也不会强制推送。域名或地址命中后仍需邮件的 SPF、DKIM 或 DMARC 认证结果支持，避免仅凭可伪造的 `From` 地址直接信任。
+详情页将邮件分类显示为中文，并记录 AI 分析和全文翻译的输入、输出 Token 用量。用量取自模型服务返回的 `usage`，服务未提供时显示“未提供”，不会按文本长度估算。默认设置 `ai.stream_usage: true` 请求流式用量；若其他 OpenAI-compatible 服务不支持 `stream_options`，可设为 `false`（服务若仍主动返回用量，程序也会记录）。
 
-推送决策联合使用 AI 的风险等级、推送建议和重要度：AI 判为 `medium` 或 `high` 的邮件默认只入库并展示在 Web；其余邮件在 AI 建议推送或重要度达到阈值时发送。禁止风险等级由 `analysis.suppress_risk_levels` 配置。若模型给出“高风险但建议推送”之类的矛盾结果，安全限制优先；后台重试和 Web 手动重推也不能绕过它。
+AI 会分别输出 0～1 的重要性分和风险分，并结合内容、时效及打扰成本给出 `should_push` 与具体理由。Prompt 要求高风险和疑似钓鱼、病毒邮件不推送；程序直接采用 AI 的决定，不再以分数阈值或风险等级重新计算。AI 分析失败或输出无效时，邮件保留在 Web 中等待重新分析，推送决定显示为“待判定”，不会自动发送。重新推送只重试 AI 决定要推送的邮件。分数仅用于展示与筛选，不代表实际投递成功。
+
+本次分析表结构已改变。升级已有安装时，请先停服并备份、移走 `data/inboxping.db` 及可能存在的 `-wal`、`-shm` 文件，再启动新版本创建数据库；`clear-data` 保留旧表结构，不能用于此次重建。具体说明见 [运维文档](docs/operations.md)。
 
 ### 邮件接收协议
 
@@ -159,7 +154,7 @@ uv run python scripts/vendor_web_assets.py
 ```text
 GET  /api/v1/overview
 GET  /api/v1/accounts
-GET  /api/v1/messages?account=&risk=&push=&limit=&offset=
+GET  /api/v1/messages?account=&min_risk_score=&push=&limit=&offset=
 GET  /api/v1/messages/{id}
 GET  /api/v1/messages/{id}/export/eml
 GET  /api/v1/messages/{id}/export/original.md
@@ -171,13 +166,13 @@ POST /api/v1/messages/{id}/translate
 DELETE /api/v1/messages/{id}/translation
 ```
 
-API 与 Web 使用同一登录会话。响应中的 `should_push` 表示系统判断该邮件是否需要推送；`notifications` 只表示实际渠道及投递结果，两者语义相互独立。
+API 与 Web 使用同一登录会话。响应中的 `should_push` 是 AI 的推送决定；`notifications` 只表示实际渠道及投递结果，两者语义相互独立。
 
 ### 全文翻译与导出
 
 邮件详情页可按需调用当前 AI 模型，将已保存的纯文本正文翻译为简体中文。译文通过 NDJSON 流在正文下方实时展开，完成时不会重载页面或改变滚动位置。只有完整译文会写入数据库；请求失败、超时或浏览器中断都不会保存残缺内容。重新翻译失败时保留上一份完整译文；“删除翻译”只删除本地译文缓存，不修改原邮件。
 
-`ai.max_output_chars` 限制单次 AI 流式输出的累计字符数，默认为 100,000。超限请求会立即中止，分析转入本地降级逻辑，翻译则在页面显示错误且不保存未完成内容。
+`ai.max_output_chars` 限制单次 AI 流式输出的累计字符数，默认为 100,000。超限请求会立即中止，分析标记失败且不自动推送，翻译则在页面显示错误且不保存未完成内容。
 
 命令行也可生成或更新译文：
 
@@ -223,7 +218,9 @@ uv run inboxping demo
 # 只读增量同步，不调用 AI、不发送通知
 uv run inboxping sync university --limit 20
 uv run inboxping messages --limit 20
-uv run inboxping messages --account university --risk low --push-only
+uv run inboxping messages --limit 20 --offset 20
+uv run inboxping messages --account university --min-risk-score 0.5
+uv run inboxping messages --push-only
 
 # 同步全部已启用邮箱，并分析新邮件
 uv run inboxping sync --analyze

@@ -4,7 +4,6 @@ import asyncio
 import json
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Literal
 from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import FastAPI, Form, HTTPException, Query, Request
@@ -72,7 +71,7 @@ def create_app(settings: Settings | None = None, *, demo_mode: bool = False) -> 
         }
         for channel in settings.notifications.channels
     }
-    push_decision = push_decision_expression(settings)
+    push_decision = push_decision_expression()
     ai_url = urlsplit(settings.ai.base_url)
     public_ai_base_url = urlunsplit((ai_url.scheme, ai_url.netloc, ai_url.path, "", ""))
     auth_enabled = bool(settings.web.password_hash.get_secret_value())
@@ -202,8 +201,8 @@ def create_app(settings: Settings | None = None, *, demo_mode: bool = False) -> 
                     select(func.count(Message.id)).where(Message.status == "pending")
                 )
                 or 0,
-                fallback=session.scalar(
-                    select(func.count(Message.id)).where(Message.status == "fallback")
+                failed=session.scalar(
+                    select(func.count(Message.id)).where(Message.status == "analysis_failed")
                 )
                 or 0,
             )
@@ -230,7 +229,7 @@ def create_app(settings: Settings | None = None, *, demo_mode: bool = False) -> 
     async def api_messages(
         request: Request,
         account: str | None = None,
-        risk: Literal["high", "medium", "low", "unknown"] | None = None,
+        min_risk_score: float | None = Query(default=None, ge=0, le=1),
         push: bool = False,
         limit: int = Query(default=50, ge=1, le=200),
         offset: int = Query(default=0, ge=0),
@@ -239,8 +238,8 @@ def create_app(settings: Settings | None = None, *, demo_mode: bool = False) -> 
         conditions = []
         if account:
             conditions.append(Message.account_id == account)
-        if risk:
-            conditions.append(Message.analysis.has(Analysis.risk_level == risk))
+        if min_risk_score is not None:
+            conditions.append(Message.analysis.has(Analysis.risk_score >= min_risk_score))
         if push:
             conditions.append(Message.analysis.has(push_decision))
         query = (
@@ -258,7 +257,7 @@ def create_app(settings: Settings | None = None, *, demo_mode: bool = False) -> 
         with db.session() as session:
             total = session.scalar(select(func.count(Message.id)).where(*conditions)) or 0
             messages = session.scalars(query).all()
-            items = [message_summary(message, settings) for message in messages]
+            items = [message_summary(message) for message in messages]
         return MessageListResponse(items=items, total=total, limit=limit, offset=offset)
 
     @app.get("/api/v1/accounts", response_model=list[AccountResponse])
@@ -301,7 +300,7 @@ def create_app(settings: Settings | None = None, *, demo_mode: bool = False) -> 
             )
             if message is None:
                 raise HTTPException(404, "邮件不存在")
-            return serialize_message_detail(message, settings, notification_channels)
+            return serialize_message_detail(message, notification_channels)
 
     @app.get("/api/v1/messages/{message_id}/export/eml")
     async def export_eml(request: Request, message_id: int) -> Response:

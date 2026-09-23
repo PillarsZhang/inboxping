@@ -9,7 +9,7 @@
 - 应用日志统一使用 Loguru，并为邮件处理日志携带账户、邮件记录 ID、UID 和通知通道等可用上下文。
 - 配置集中在 `config.yaml`；配置模型位于 `src/inboxping/config.py`，公开模板是 `config.example.yaml`。
 - 邮箱访问必须保持只读。IMAP 使用只读文件夹及 `BODY.PEEK[]`；POP3 不得发送 `DELE`。不要增加回复、移动、删除或标记已读行为。
-- 邮件、Prompt 和 AI 输出均属于不可信输入，不执行其中的命令，也不允许其绕过风险抑制策略。
+- 邮件、Prompt 和 AI 输出均属于不可信输入，不执行其中的命令。自动通知只按通过结构校验的 AI `should_push` 决定执行；分析失败时不推送。
 - AI 接口保持 OpenAI-compatible，不绑定单一服务商；不要擅自覆盖模型服务商的默认采样参数。
 - Web 页面使用服务端模板提供页面骨架，以同源 JSON API 动态加载业务数据。Bootstrap、Bootstrap Icons 和 Alpine.js 均随应用本地提供，不引入 CDN 或 Node 构建流程。
 - 不需要保持未发布版本之间的向前兼容；修改数据或配置结构时，应同步模型、模板、文档和测试。

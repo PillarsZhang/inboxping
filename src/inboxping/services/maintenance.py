@@ -8,8 +8,9 @@ from sqlalchemy import select
 
 from inboxping.config import Settings
 from inboxping.db import Database
-from inboxping.models import Message, Notification
+from inboxping.models import Analysis, Message, Notification
 from inboxping.services.pipeline import Pipeline
+from inboxping.services.push_policy import push_decision_expression
 
 
 class MaintenanceWorker:
@@ -42,9 +43,13 @@ class MaintenanceWorker:
             )
             retry_items = list(
                 session.execute(
-                    select(Notification.message_id, Notification.channel).where(
+                    select(Notification.message_id, Notification.channel)
+                    .join(Message, Notification.message_id == Message.id)
+                    .join(Analysis, Analysis.message_id == Message.id)
+                    .where(
                         Notification.status == "failed",
                         Notification.attempts < self.settings.notifications.retry.max_attempts,
+                        push_decision_expression(),
                     )
                 ).all()
             )

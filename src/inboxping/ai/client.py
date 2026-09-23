@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
+from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 import httpx
 from httpx_sse import aconnect_sse
@@ -16,6 +18,18 @@ from inboxping.config import Settings
 from inboxping.models import Message
 
 
+@dataclass(frozen=True)
+class TokenUsage:
+    prompt_tokens: int
+    completion_tokens: int
+
+
+@dataclass(frozen=True)
+class AnalyzedMessage:
+    result: AnalysisResult
+    usage: TokenUsage | None
+
+
 class AIClient:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -26,36 +40,44 @@ class AIClient:
             self.settings.ai.enabled and self.settings.ai.base_url and self.settings.ai.model
         )
 
-    def trust_context(self, message: Message) -> str:
+    def authentication_context(self, message: Message) -> str:
         try:
             authentication = json.loads(message.authentication_json or "{}")
         except json.JSONDecodeError:
             authentication = {}
-        sender = message.sender_address.strip().lower()
-        domain = sender.rsplit("@", 1)[-1] if "@" in sender else ""
-        sender_match = sender in {
-            item.strip().lower() for item in self.settings.rules.trusted_senders
-        }
-        domain_match = any(
-            domain == item.strip().lower() or domain.endswith(f".{item.strip().lower()}")
-            for item in self.settings.rules.trusted_domains
-            if item.strip()
-        )
-        any_auth_pass = any(authentication.get(item) == "pass" for item in ("spf", "dkim", "dmarc"))
-        strong_auth_pass = any(authentication.get(item) == "pass" for item in ("dkim", "dmarc"))
-        if sender_match and any_auth_pass:
-            trust = "精确发件人匹配且认证通过"
-        elif domain_match and strong_auth_pass:
-            trust = "可信域名匹配且 DKIM/DMARC 通过"
-        elif sender_match or domain_match:
-            trust = "命中本地信任配置，但邮件认证未通过或缺失，不应直接信任"
-        else:
-            trust = "未命中本地信任配置"
         auth_text = ", ".join(
-            f"{item.upper()}={authentication.get(item, 'unknown')}"
+            f"{item.upper()}={str(authentication.get(item, 'unknown'))[:20]}"
             for item in ("spf", "dkim", "dmarc")
         )
-        return f"{auth_text}；{trust}"
+        return auth_text
+
+    def trust_context(self, message: Message) -> str:
+        sender = message.sender_address.strip().lower()
+        sender_domain = sender.rsplit("@", 1)[-1] if "@" in sender else ""
+        links = re.findall(r"https?://[^\s<>\"']+", message.text_body, re.IGNORECASE)
+        link_hosts: set[str] = set()
+        for link in links:
+            try:
+                host = urlsplit(link.rstrip(".,;:!?)")).hostname
+            except ValueError:
+                continue
+            if host:
+                link_hosts.add(host.lower())
+        matches: list[str] = []
+        for entry in self.settings.trust.sender_addresses:
+            if sender == entry.value:
+                matches.append(self._trust_match("发件地址", entry.value, entry.note))
+        for entry in self.settings.trust.sender_domains:
+            if sender_domain == entry.value or sender_domain.endswith(f".{entry.value}"):
+                matches.append(self._trust_match("发件域名", entry.value, entry.note))
+        for entry in self.settings.trust.link_domains:
+            if any(host == entry.value or host.endswith(f".{entry.value}") for host in link_hosts):
+                matches.append(self._trust_match("链接域名", entry.value, entry.note))
+        return "；".join(matches) if matches else "未命中本地信任参考名单"
+
+    @staticmethod
+    def _trust_match(kind: str, value: str, note: str | None) -> str:
+        return f"{kind}={value}" + (f"（备注：{note}）" if note else "")
 
     def _timeout(self) -> httpx.Timeout:
         return httpx.Timeout(
@@ -77,10 +99,16 @@ class AIClient:
         return total
 
     async def _stream_chat(
-        self, payload: dict[str, object], *, message_id: int
+        self,
+        payload: dict[str, object],
+        *,
+        message_id: int,
+        on_usage: Callable[[TokenUsage], None] | None = None,
     ) -> AsyncIterator[str]:
         url = f"{self.settings.ai.base_url.rstrip('/')}/chat/completions"
         stream_payload = {**payload, "stream": True}
+        if self.settings.ai.stream_usage:
+            stream_payload["stream_options"] = {"include_usage": True}
         output_chars = 0
         async with (
             asyncio.timeout(self.settings.ai.max_stream_seconds),
@@ -99,8 +127,28 @@ class AIClient:
                     break
                 try:
                     data = json.loads(event.data)
-                    content = data["choices"][0]["delta"].get("content")
-                except (json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
+                    usage = data.get("usage")
+                    if on_usage and isinstance(usage, dict):
+                        prompt_tokens = usage.get("prompt_tokens")
+                        completion_tokens = usage.get("completion_tokens")
+                        if (
+                            type(prompt_tokens) is int
+                            and prompt_tokens >= 0
+                            and type(completion_tokens) is int
+                            and completion_tokens >= 0
+                        ):
+                            on_usage(TokenUsage(prompt_tokens, completion_tokens))
+                    choices = data.get("choices") or []
+                    if not choices:
+                        continue
+                    content = choices[0]["delta"].get("content")
+                except (
+                    json.JSONDecodeError,
+                    AttributeError,
+                    KeyError,
+                    IndexError,
+                    TypeError,
+                ) as exc:
                     logger.bind(message_id=message_id).warning(
                         "忽略无法解析的 AI 流事件: {}", type(exc).__name__
                     )
@@ -116,7 +164,7 @@ class AIClient:
                         output_chars = self._count_output(output_chars, text)
                         yield text
 
-    async def analyze(self, message: Message, prompt: Prompt) -> AnalysisResult:
+    async def analyze(self, message: Message, prompt: Prompt) -> AnalyzedMessage:
         if not self.enabled:
             raise RuntimeError("AI 未启用：请检查 config.yaml 中的 ai.enabled")
         schema = AnalysisResult.model_json_schema()
@@ -126,7 +174,11 @@ class AIClient:
                 {"role": "system", "content": prompt.system},
                 {
                     "role": "user",
-                    "content": prompt.render(message, self.trust_context(message)),
+                    "content": prompt.render(
+                        message,
+                        self.authentication_context(message),
+                        self.trust_context(message),
+                    ),
                 },
             ],
         }
@@ -140,13 +192,35 @@ class AIClient:
         elif self.settings.ai.response_format == "json_object":
             payload["response_format"] = {"type": "json_object"}
         logger.bind(message_id=message.id, model=self.settings.ai.model).debug("调用 AI 分析")
+        request_usages: list[TokenUsage | None] = []
         for attempt in range(2):
-            chunks = [chunk async for chunk in self._stream_chat(payload, message_id=message.id)]
+            usage: TokenUsage | None = None
+
+            def record_usage(value: TokenUsage) -> None:
+                nonlocal usage
+                usage = value
+
+            chunks = [
+                chunk
+                async for chunk in self._stream_chat(
+                    payload, message_id=message.id, on_usage=record_usage
+                )
+            ]
+            request_usages.append(usage)
             content = "".join(chunks)
             try:
                 if match := re.search(r"```(?:json)?\s*(\{.*\})\s*```", content, re.DOTALL):
                     content = match.group(1)
-                return AnalysisResult.model_validate(json.loads(content))
+                result = AnalysisResult.model_validate(json.loads(content))
+                total_usage = (
+                    TokenUsage(
+                        sum(item.prompt_tokens for item in request_usages if item),
+                        sum(item.completion_tokens for item in request_usages if item),
+                    )
+                    if all(request_usages)
+                    else None
+                )
+                return AnalyzedMessage(result, total_usage)
             except (json.JSONDecodeError, ValidationError, KeyError, TypeError) as exc:
                 if attempt == 1:
                     raise
@@ -156,7 +230,11 @@ class AIClient:
         raise AssertionError("unreachable")
 
     async def stream_translation(
-        self, message: Message, prompt: TranslationPrompt
+        self,
+        message: Message,
+        prompt: TranslationPrompt,
+        *,
+        on_usage: Callable[[TokenUsage], None] | None = None,
     ) -> AsyncIterator[str]:
         if not self.enabled:
             raise RuntimeError("AI 未启用：请检查 config.yaml 中的 ai.enabled")
@@ -170,5 +248,5 @@ class AIClient:
         if self.settings.ai.temperature is not None:
             payload["temperature"] = self.settings.ai.temperature
         logger.bind(message_id=message.id, model=self.settings.ai.model).debug("调用 AI 流式翻译")
-        async for chunk in self._stream_chat(payload, message_id=message.id):
+        async for chunk in self._stream_chat(payload, message_id=message.id, on_usage=on_usage):
             yield chunk

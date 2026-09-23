@@ -2,10 +2,10 @@ from inboxping.mail.parser import parse_message
 
 
 def test_parse_plain_message_without_marking_side_effects() -> None:
-    raw = """From: =?UTF-8?B?5pWZ5Yqh5aSE?= <office@example.edu.cn>
-To: student@example.edu.cn
+    raw = """From: =?UTF-8?B?5pWZ5Yqh5aSE?= <office@example.edu>
+To: student@example.edu
 Subject: =?UTF-8?B?6YCJ6K++56Gu6K6k6YCa55+l?=
-Message-ID: <one@example.edu.cn>
+Message-ID: <one@example.edu>
 Date: Sun, 20 Sep 2026 10:00:00 +0800
 Content-Type: text/plain; charset=utf-8
 Content-Transfer-Encoding: 8bit
@@ -14,10 +14,10 @@ Content-Transfer-Encoding: 8bit
 """.encode()
     result = parse_message(raw)
     assert result.sender_name == "教务处"
-    assert result.sender_address == "office@example.edu.cn"
+    assert result.sender_address == "office@example.edu"
     assert result.subject == "选课确认通知"
     assert "本周五" in result.text_body
-    assert result.message_id == "<one@example.edu.cn>"
+    assert result.message_id == "<one@example.edu>"
 
 
 def test_parse_html_and_attachment_metadata() -> None:

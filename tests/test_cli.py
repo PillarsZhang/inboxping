@@ -17,3 +17,9 @@ def test_public_http_url_removes_credentials_query_and_fragment() -> None:
     value = "https://user:password@api.example.com:8443/v1?token=private#fragment"
 
     assert _public_http_url(value) == "https://api.example.com:8443/v1"
+
+
+def test_messages_help_exposes_pagination() -> None:
+    result = CliRunner().invoke(app, ["messages", "--help"])
+    assert result.exit_code == 0
+    assert "--offset" in result.output

@@ -19,8 +19,8 @@ class DemoMail:
     title: str
     summary: str
     category: str
-    importance: float
-    risk: str = "low"
+    importance_score: float
+    risk_score: float = 0.05
     action: str = ""
     deadline: str | None = None
     push: bool = False
@@ -49,9 +49,9 @@ DEMO_MAILS = (
         "邮件伪装成文件投递通知，附件类型和发件来源异常，具有恶意程序传播特征，已禁止推送。",
         "malware",
         0.98,
-        risk="high",
+        risk_score=0.98,
         action="不要打开附件，删除邮件并通过安全渠道报告",
-        push=True,
+        push=False,
     ),
     DemoMail(
         "campus_mail",
@@ -156,7 +156,7 @@ def seed_demo_data(settings: Settings) -> None:
                 text_body=sample.summary,
                 authentication_json=json.dumps(
                     {"spf": "pass", "dkim": "pass", "dmarc": "pass"}
-                    if sample.risk == "low"
+                    if sample.risk_score < 0.5
                     else {"spf": "fail", "dkim": "unknown", "dmarc": "fail"}
                 ),
                 status="completed",
@@ -171,22 +171,23 @@ def seed_demo_data(settings: Settings) -> None:
                     title_zh=sample.title,
                     summary_zh=sample.summary,
                     category=sample.category,
-                    importance=sample.importance,
-                    risk_level=sample.risk,
-                    risk_types_json='["malware"]' if sample.risk == "high" else "[]",
+                    importance_score=sample.importance_score,
+                    risk_score=sample.risk_score,
+                    risk_types_json='["malware"]' if sample.risk_score > 0.9 else "[]",
                     risk_reason=(
                         "发件来源与附件类型异常，疑似传播恶意程序。"
-                        if sample.risk == "high"
+                        if sample.risk_score > 0.9
                         else "发件认证通过，内容与发件来源一致。"
                     ),
                     action_required=bool(sample.action),
                     action_text=sample.action,
                     deadline=sample.deadline,
-                    push_recommended=sample.push,
+                    should_push=sample.push,
+                    push_reason=("需要及时确认选课安排" if sample.push else "无需即时通知"),
                     raw_json="{}",
                 )
             )
-            if sample.push and sample.risk == "low":
+            if sample.push:
                 session.add(
                     Notification(
                         message_id=message.id,

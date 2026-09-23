@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 DEFAULT_CONFIG_PATH = Path("config.yaml")
 CONFIG_PATH_ENV = "INBOXPING_CONFIG"
@@ -37,6 +37,7 @@ class AIConfig(StrictModel):
     read_timeout_seconds: float = Field(default=90, gt=0)
     max_stream_seconds: float = Field(default=600, gt=0)
     max_output_chars: int = Field(default=100_000, ge=1000)
+    stream_usage: bool = True
     # None means that the provider's default sampling parameters are preserved.
     temperature: float | None = Field(default=None, ge=0, le=2)
 
@@ -143,9 +144,30 @@ class MailConfig(StrictModel):
         return self
 
 
-class RulesConfig(StrictModel):
-    trusted_senders: list[str] = Field(default_factory=list)
-    trusted_domains: list[str] = Field(default_factory=list)
+class TrustedAddress(StrictModel):
+    value: str = Field(pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+    note: str | None = Field(default=None, max_length=300)
+
+    @field_validator("value")
+    @classmethod
+    def normalize_value(cls, value: str) -> str:
+        return value.strip().lower()
+
+
+class TrustedDomain(StrictModel):
+    value: str = Field(pattern=r"^(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$")
+    note: str | None = Field(default=None, max_length=300)
+
+    @field_validator("value")
+    @classmethod
+    def normalize_value(cls, value: str) -> str:
+        return value.strip().lower()
+
+
+class TrustConfig(StrictModel):
+    sender_addresses: list[TrustedAddress] = Field(default_factory=list)
+    sender_domains: list[TrustedDomain] = Field(default_factory=list)
+    link_domains: list[TrustedDomain] = Field(default_factory=list)
 
 
 class MonitorConfig(StrictModel):
@@ -157,10 +179,6 @@ class MonitorConfig(StrictModel):
 
 class AnalysisConfig(StrictModel):
     body_max_chars: int = Field(default=20_000, ge=1000)
-    push_importance_threshold: float = Field(default=0.70, ge=0, le=1)
-    suppress_risk_levels: set[Literal["low", "medium", "high", "unknown"]] = Field(
-        default_factory=lambda: {"medium", "high"}
-    )
     prompt_dir: Path = Path("prompts")
 
 
@@ -178,7 +196,7 @@ class Settings(StrictModel):
     ai: AIConfig = Field(default_factory=AIConfig)
     notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
     mail: MailConfig = Field(default_factory=MailConfig)
-    rules: RulesConfig = Field(default_factory=RulesConfig)
+    trust: TrustConfig = Field(default_factory=TrustConfig)
     monitor: MonitorConfig = Field(default_factory=MonitorConfig)
     analysis: AnalysisConfig = Field(default_factory=AnalysisConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)

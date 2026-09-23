@@ -4,7 +4,7 @@ window.dashboardPage = () => ({
   total: 0,
   pageSize: 20,
   account: "",
-  risk: "",
+  minRiskScore: "",
   pushOnly: false,
   offset: 0,
   loadingOverview: true,
@@ -15,7 +15,7 @@ window.dashboardPage = () => ({
   init() {
     const params = new URLSearchParams(window.location.search);
     this.account = params.get("account") || "";
-    this.risk = params.get("risk") || "";
+    this.minRiskScore = params.get("min_risk_score") || "";
     this.pushOnly = params.get("push") === "true";
     const requestedSize = Number(params.get("limit"));
     if ([20, 50, 100].includes(requestedSize)) this.pageSize = requestedSize;
@@ -45,7 +45,7 @@ window.dashboardPage = () => ({
     this.loadingMessages = true;
     const params = new URLSearchParams({ limit: this.pageSize, offset: this.offset });
     if (this.account) params.set("account", this.account);
-    if (this.risk) params.set("risk", this.risk);
+    if (this.minRiskScore !== "") params.set("min_risk_score", this.minRiskScore);
     if (this.pushOnly) params.set("push", "true");
     try {
       const data = await InboxPing.apiFetch(`/api/v1/messages?${params}`);
@@ -77,7 +77,7 @@ window.dashboardPage = () => ({
 
   clearFilters() {
     this.account = "";
-    this.risk = "";
+    this.minRiskScore = "";
     this.pushOnly = false;
     this.applyFilters();
   },
@@ -102,7 +102,7 @@ window.dashboardPage = () => ({
   syncUrl() {
     const params = new URLSearchParams();
     if (this.account) params.set("account", this.account);
-    if (this.risk) params.set("risk", this.risk);
+    if (this.minRiskScore !== "") params.set("min_risk_score", this.minRiskScore);
     if (this.pushOnly) params.set("push", "true");
     if (this.pageSize !== 20) params.set("limit", this.pageSize);
     if (this.offset) params.set("offset", this.offset);
@@ -119,6 +119,5 @@ window.dashboardPage = () => ({
     const end = Math.min(this.pageCount, start + 4);
     return Array.from({ length: end - start + 1 }, (_, index) => start + index);
   },
-  riskLabel(level) { return InboxPing.riskLabels[level] || level; },
   accountStatus(status) { return InboxPing.accountStatusLabels[status] || status; },
 });

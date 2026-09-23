@@ -20,6 +20,8 @@ ai:
   read_timeout_seconds: 90
   max_stream_seconds: 600
   max_output_chars: 100000
+  # 请求流式 token 用量；若兼容服务不支持 stream_options，可设为 false。
+  stream_usage: true
   # null 表示不向模型传 temperature，保留服务商默认参数。
   temperature: null
 
@@ -47,12 +49,12 @@ mail:
   accounts:
     - id: university
       name: 学校邮箱
-      username: student@example.edu.cn
+      username: student@example.edu
       password: ""
       # 明确选择协议：imap_idle、imap_poll 或 pop3_poll。
       protocol: imap_poll
       imap:
-        host: imap.example.edu.cn
+        host: imap.example.edu
         port: 993
         folder: INBOX
         ssl: true
@@ -70,12 +72,14 @@ mail:
         ssl: true
       enabled: false
 
-rules:
-  trusted_senders:
-    - your-personal-address@example.com
-  trusted_domains:
-    - example.edu
-    - example.org
+trust:
+  # 仅作为 AI 判断的参考背景，不自动放行或改变推送规则；note 可省略。
+  sender_addresses:
+    - value: notice@example.org
+      note: 曾通过独立渠道确认的通知地址
+  sender_domains: []
+  link_domains:
+    - value: portal.example.com
 
 monitor:
   poll_interval_seconds: 60
@@ -86,11 +90,6 @@ monitor:
 
 analysis:
   body_max_chars: 20000
-  push_importance_threshold: 0.70
-  # AI 判为这些风险等级时只入库并在 Web 展示，不发送通知。
-  suppress_risk_levels:
-    - medium
-    - high
   prompt_dir: prompts
 
 storage:

@@ -20,7 +20,7 @@
       <template x-for="item in [
         { label: '邮件总数', value: overview?.stats.total, icon: 'bi-envelope' },
         { label: '待分析', value: overview?.stats.pending, icon: 'bi-hourglass-split' },
-        { label: '降级分析', value: overview?.stats.fallback, icon: 'bi-cloud-slash' },
+        { label: '分析失败', value: overview?.stats.failed, icon: 'bi-cloud-slash' },
         { label: 'AI', value: overview?.services.ai_enabled ? '已启用' : '未启用', icon: 'bi-stars' },
         { label: '通知', value: overview?.services.notifications_enabled ? '已启用' : '未启用', icon: 'bi-send' },
       ]" :key="item.label">
@@ -117,8 +117,8 @@
             <option :value="accountItem.id" x-text="accountItem.name"></option>
           </template>
         </select>
-        <select class="form-select form-select-sm" aria-label="风险等级" x-model="risk">
-          <option value="">全部风险</option><option value="high">高风险</option><option value="medium">中风险</option><option value="low">低风险</option><option value="unknown">风险未知</option>
+        <select class="form-select form-select-sm" aria-label="最低风险分" x-model="minRiskScore">
+          <option value="">全部风险分</option><option value="0.25">风险分 ≥ 25%</option><option value="0.5">风险分 ≥ 50%</option><option value="0.75">风险分 ≥ 75%</option>
         </select>
         <button class="btn btn-primary btn-sm" type="submit"><i class="bi bi-funnel me-1" aria-hidden="true"></i>筛选</button>
         <button class="btn btn-sm" :class="pushOnly ? 'btn-success' : 'btn-outline-secondary'" type="button" @click="togglePush"><i class="bi bi-send-check me-1" aria-hidden="true"></i>推送</button>
@@ -131,9 +131,10 @@
       <div class="loading-state" x-show="loadingMessages && !messages.length"><span class="spinner-border text-primary" aria-hidden="true"></span><span>正在加载邮件</span></div>
       <div class="empty-state" x-show="!loadingMessages && !messages.length"><i class="bi bi-inbox" aria-hidden="true"></i><p>当前条件下没有邮件</p></div>
       <div class="list-group list-group-flush" x-show="messages.length">
-        <template x-for="mail in messages" :key="mail.id">
+        <template x-for="(mail, index) in messages" :key="mail.id">
           <article class="list-group-item mail-item" :class="{ 'mail-item-push': mail.should_push }">
             <div class="mail-time">
+              <span class="mail-list-index" :aria-label="`列表第 ${offset + index + 1} 封`" x-text="offset + index + 1"></span>
               <time x-text="formatDate(mail.displayed_at).slice(5)"></time>
               <span class="text-secondary" x-text="mail.account_id"></span>
             </div>
@@ -142,7 +143,11 @@
               <strong class="mail-sender" x-text="mail.sender_name || mail.sender_address || '未记录'"></strong>
               <span class="mail-address" x-show="mail.sender_name && mail.sender_address" x-text="mail.sender_address"></span>
               <span class="field-label mt-2">收件人</span>
-              <span class="mail-address clamp-2" x-text="mail.recipients || '未记录'"></span>
+              <span class="mail-recipient-summary">
+                <span class="mail-address mail-recipient-preview" x-text="mail.recipient_preview || '未记录'"></span>
+                <span class="mail-recipient-ellipsis" x-show="mail.recipient_count > 3" aria-hidden="true">…</span>
+                <span class="mail-recipient-count" x-show="mail.recipient_count > 1" x-text="`共 ${mail.recipient_count} 人`"></span>
+              </span>
             </div>
             <div class="mail-copy">
               <span class="analysis-title" x-show="mail.analysis?.title" x-text="mail.analysis?.title"></span>
@@ -150,9 +155,9 @@
               <p x-text="mail.analysis?.summary || (mail.status === 'pending' ? '等待分析' : '尚无分析结果')"></p>
             </div>
             <div class="mail-flags">
-              <span class="fw-bold" x-text="mail.analysis ? `${Math.round(mail.analysis.importance * 100)}%` : '待分析'"></span>
-              <span class="risk-pill" :class="`risk-${mail.analysis?.risk_level || 'pending'}`" x-text="mail.analysis ? riskLabel(mail.analysis.risk_level) : '待分析'"></span>
-              <span class="push-pill" x-show="mail.should_push"><i class="bi bi-send-check" aria-hidden="true"></i>推送</span>
+              <span class="score-badge score-importance"><i class="bi bi-bookmark-star" aria-hidden="true"></i><span>重要</span><strong x-text="mail.analysis?.importance_score != null ? `${Math.round(mail.analysis.importance_score * 100)}%` : '待分析'"></strong></span>
+              <span class="score-badge score-risk"><i class="bi bi-shield-exclamation" aria-hidden="true"></i><span>风险</span><strong x-text="mail.analysis?.risk_score != null ? `${Math.round(mail.analysis.risk_score * 100)}%` : '待分析'"></strong></span>
+              <span class="score-badge score-decision" :class="mail.should_push == null ? 'score-undecided' : (mail.should_push ? 'score-push' : 'score-no-push')" :aria-label="mail.should_push == null ? '推送待判定' : (mail.should_push ? '需要推送' : '不需要推送')"><i class="bi bi-send" aria-hidden="true"></i><span>推送</span><strong x-text="mail.should_push == null ? '…' : (mail.should_push ? '✓' : '✕')"></strong></span>
             </div>
           </article>
         </template>

@@ -4,6 +4,7 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
+from inboxping.mail.recipients import summarize_recipients
 from inboxping.models import Message
 
 
@@ -13,13 +14,19 @@ class Prompt:
     user_template: str
     version: str
 
-    def render(self, message: Message, trust_context: str = "未评估") -> str:
+    def render(
+        self,
+        message: Message,
+        authentication_context: str = "未评估",
+        trust_context: str = "未命中本地信任参考名单",
+    ) -> str:
         return self.user_template.format(
             subject=message.subject,
             sender_name=message.sender_name,
             sender_address=message.sender_address,
-            recipients=message.recipients,
+            recipients=summarize_recipients(message.recipients or "").prompt_context,
             attachments=message.attachments_json,
+            authentication_context=authentication_context,
             trust_context=trust_context,
             body=message.text_body,
         )

@@ -2,9 +2,10 @@
 
 主题：{subject}
 发件人：{sender_name} <{sender_address}>
-收件人：{recipients}
+收件人概况（完整名单已省略）：{recipients}
 附件：{attachments}
-发件认证与本地信任：{trust_context}
+发件认证（未经独立验证，仅供参考）：{authentication_context}
+本地信任参考（由用户配置，不是身份认证或安全保证）：{trust_context}
 正文开始：
 ---
 {body}

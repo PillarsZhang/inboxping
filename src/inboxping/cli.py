@@ -24,7 +24,7 @@ from inboxping.db import Database
 from inboxping.logging import configure_logging
 from inboxping.mail.monitor import MailMonitor
 from inboxping.mail.parser import normalize_utc, parse_message
-from inboxping.models import AccountState, Message
+from inboxping.models import AccountState, Analysis, Message
 from inboxping.services.pipeline import Pipeline
 from inboxping.services.push_policy import push_decision_expression, should_push
 
@@ -120,7 +120,7 @@ def doctor() -> None:
         session.execute(select(1))
     typer.echo("  ✓ 可读写")
     typer.echo(f"AI: {_public_http_url(settings.ai.base_url)} / {settings.ai.model}")
-    typer.echo("  ✓ 已启用" if pipeline.ai.enabled else "  ! 未启用，将使用本地降级分析")
+    typer.echo("  ✓ 已启用" if pipeline.ai.enabled else "  ! 未启用，新邮件不会自动推送")
     typer.echo("通知: " + ("✓ 已配置" if pipeline.notifier.enabled else "! 未配置"))
     for channel_id, notifier in pipeline.notifier.channels.items():
         default = " [默认]" if channel_id in pipeline.notifier.default_channel_ids else ""
@@ -243,22 +243,21 @@ def accounts() -> None:
 @app.command("messages")
 def messages(
     limit: Annotated[int, typer.Option(min=1, max=500)] = 20,
+    offset: Annotated[int, typer.Option(min=0, help="跳过前 N 封，便于翻阅历史邮件")] = 0,
     account: Annotated[str | None, typer.Option(help="只显示指定账户")] = None,
-    risk: Annotated[
-        str | None, typer.Option(help="只显示指定风险：low/medium/high/unknown")
+    min_risk_score: Annotated[
+        float | None, typer.Option(min=0, max=1, help="只显示风险分不低于此值的邮件")
     ] = None,
-    push_only: Annotated[bool, typer.Option(help="只显示系统判断需要推送的邮件")] = False,
+    push_only: Annotated[bool, typer.Option(help="只显示 AI 决定推送的邮件")] = False,
 ) -> None:
-    settings, db, _ = context()
-    if risk and risk not in {"low", "medium", "high", "unknown"}:
-        raise typer.BadParameter("风险必须是 low/medium/high/unknown", param_hint="--risk")
+    _, db, _ = context()
     conditions = []
     if account:
         conditions.append(Message.account_id == account)
-    if risk:
-        conditions.append(Message.analysis.has(risk_level=risk))
+    if min_risk_score is not None:
+        conditions.append(Message.analysis.has(Analysis.risk_score >= min_risk_score))
     if push_only:
-        conditions.append(Message.analysis.has(push_decision_expression(settings)))
+        conditions.append(Message.analysis.has(push_decision_expression()))
     with db.session() as session:
         rows = session.scalars(
             select(Message)
@@ -268,10 +267,17 @@ def messages(
                 func.coalesce(Message.sent_at, Message.received_at).desc(),
                 Message.id.desc(),
             )
+            .offset(offset)
             .limit(limit)
         ).all()
         for row in rows:
-            decision = "推送" if should_push(row.analysis, settings) else "-"
+            decision = (
+                "待判定"
+                if row.analysis is None or row.analysis.should_push is None
+                else "推送"
+                if should_push(row.analysis)
+                else "不推送"
+            )
             prefix = f"{row.id:6} {row.account_id:16} {row.status:10} {decision:4}"
             typer.echo(f"{prefix} {row.sender_address[:28]:28} {row.subject[:60]}")
     if not rows:
@@ -285,7 +291,9 @@ def sync_mail(
     ] = None,
     limit: Annotated[int, typer.Option(min=1, max=500, help="每个账户本次最多同步数")] = 50,
     analyze: Annotated[bool, typer.Option(help="对新邮件调用 AI 分析")] = False,
-    notify: Annotated[bool, typer.Option(help="按策略发送企业微信通知，需要 --analyze")] = False,
+    notify: Annotated[
+        bool, typer.Option(help="按 AI 推送决定发送企业微信通知，需要 --analyze")
+    ] = False,
 ) -> None:
     """只读增量同步新邮件；可选执行 AI 分析和通知。"""
     if notify and not analyze:
@@ -336,8 +344,9 @@ def prompt_show(
         message = session.get(Message, message_id)
         if not message:
             raise typer.BadParameter(f"邮件 {message_id} 不存在")
+        authentication = pipeline.ai.authentication_context(message)
         trust = pipeline.ai.trust_context(message)
-        typer.echo(f"\n[RENDERED USER]\n{prompt.render(message, trust)}")
+        typer.echo(f"\n[RENDERED USER]\n{prompt.render(message, authentication, trust)}")
 
 
 @app.command("analyze-message")
@@ -345,7 +354,7 @@ def analyze_message(
     message_id: int,
     dry_run: Annotated[bool, typer.Option(help="仅展示将发送的 Prompt")] = False,
     force: Annotated[bool, typer.Option(help="覆盖已有分析")] = False,
-    notify: Annotated[bool, typer.Option(help="按规则发送通知")] = False,
+    notify: Annotated[bool, typer.Option(help="按 AI 推送决定发送通知")] = False,
 ) -> None:
     settings, db, pipeline = context()
     if dry_run:
@@ -354,8 +363,12 @@ def analyze_message(
             message = session.get(Message, message_id)
             if not message:
                 raise typer.BadParameter(f"邮件 {message_id} 不存在")
+            authentication = pipeline.ai.authentication_context(message)
             trust = pipeline.ai.trust_context(message)
-            typer.echo(f"[SYSTEM]\n{prompt.system}\n\n[USER]\n{prompt.render(message, trust)}")
+            typer.echo(
+                f"[SYSTEM]\n{prompt.system}\n\n[USER]\n"
+                f"{prompt.render(message, authentication, trust)}"
+            )
         return
     result = asyncio.run(pipeline.process(message_id, force=force, notify=notify))
     typer.echo(result.raw_json)
@@ -412,13 +425,13 @@ def import_eml(
 @app.command("reprocess")
 def reprocess(
     limit: Annotated[int, typer.Option(min=1, max=1000)] = 20,
-    failed_only: Annotated[bool, typer.Option(help="仅重试降级/失败邮件")] = True,
+    failed_only: Annotated[bool, typer.Option(help="仅重试分析失败/待分析邮件")] = True,
 ) -> None:
     _, db, pipeline = context()
     with db.session() as session:
         query = select(Message.id).order_by(Message.received_at.desc()).limit(limit)
         if failed_only:
-            query = query.where(Message.status.in_(["fallback", "error", "pending"]))
+            query = query.where(Message.status.in_(["analysis_failed", "error", "pending"]))
         ids = list(session.scalars(query).all())
 
     async def run() -> None:

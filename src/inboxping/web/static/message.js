@@ -1,6 +1,9 @@
 window.messagePage = (messageId) => ({
   messageId,
   message: null,
+  recipientsExpanded: false,
+  recipientList: [],
+  copiedRecipients: false,
   loading: true,
   action: null,
   translating: false,
@@ -11,11 +14,22 @@ window.messagePage = (messageId) => ({
 
   init() { this.load(); },
 
+  async copyRecipients() {
+    try {
+      await navigator.clipboard.writeText(this.recipientList.join("\n"));
+      this.copiedRecipients = true;
+    } catch (_) {
+      this.error = "复制失败，请手动选择收件地址";
+    }
+  },
+
   async load(showLoading = true) {
     if (showLoading) this.loading = true;
     this.error = "";
     try {
       this.message = await InboxPing.apiFetch(`/api/v1/messages/${this.messageId}`);
+      this.recipientList = this.message.recipient_addresses || [];
+      this.copiedRecipients = false;
       document.title = `${this.message.analysis?.title || this.message.subject} · InboxPing`;
     } catch (error) {
       this.error = error.message;
@@ -98,6 +112,5 @@ window.messagePage = (messageId) => ({
   },
 
   formatDate: InboxPing.formatDate,
-  riskLabel(level) { return InboxPing.riskLabels[level] || level; },
   deliveryLabel(status) { return InboxPing.deliveryLabels[status] || status; },
 });

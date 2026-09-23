@@ -5,9 +5,8 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from inboxping.config import Settings
+from inboxping.mail.recipients import RecipientSummary, summarize_recipients
 from inboxping.models import AccountState, Analysis, Event, Message, Notification, Translation
-from inboxping.services.push_policy import should_push
 
 
 def utc_datetime(value: datetime | None) -> datetime | None:
@@ -19,7 +18,7 @@ def utc_datetime(value: datetime | None) -> datetime | None:
 class StatsResponse(BaseModel):
     total: int
     pending: int
-    fallback: int
+    failed: int
 
 
 class ServicesResponse(BaseModel):
@@ -63,13 +62,16 @@ class AnalysisResponse(BaseModel):
     title: str
     summary: str
     category: str
-    importance: float
-    risk_level: str
+    importance_score: float | None
+    risk_score: float | None
     risk_reason: str
+    push_reason: str
     action_required: bool
     action_text: str
     deadline: str | None
     model: str
+    prompt_tokens: int | None
+    completion_tokens: int | None
 
 
 class MessageSummaryResponse(BaseModel):
@@ -78,12 +80,13 @@ class MessageSummaryResponse(BaseModel):
     subject: str
     sender_name: str
     sender_address: str
-    recipients: str
+    recipient_count: int
+    recipient_preview: str
     sent_at: datetime | None
     received_at: datetime
     displayed_at: datetime
     status: str
-    should_push: bool
+    should_push: bool | None
     analysis: AnalysisResponse | None
 
 
@@ -101,12 +104,15 @@ class TranslationResponse(BaseModel):
     text: str
     target_language: str
     model: str
+    prompt_tokens: int | None
+    completion_tokens: int | None
     updated_at: datetime
 
 
 class MessageDetailResponse(MessageSummaryResponse):
     uid: int
     folder: str
+    recipient_addresses: list[str]
     text_body: str
     translation: TranslationResponse | None
     notifications: list[NotificationResponse]
@@ -131,32 +137,39 @@ def analysis_response(analysis: Analysis | None) -> AnalysisResponse | None:
         title=analysis.title_zh,
         summary=analysis.summary_zh,
         category=analysis.category,
-        importance=analysis.importance,
-        risk_level=analysis.risk_level,
+        importance_score=analysis.importance_score,
+        risk_score=analysis.risk_score,
         risk_reason=analysis.risk_reason,
+        push_reason=analysis.push_reason,
         action_required=analysis.action_required,
         action_text=analysis.action_text,
         deadline=analysis.deadline,
         model=analysis.model,
+        prompt_tokens=analysis.prompt_tokens,
+        completion_tokens=analysis.completion_tokens,
     )
 
 
-def message_summary(message: Message, settings: Settings) -> MessageSummaryResponse:
+def message_summary(
+    message: Message, recipients: RecipientSummary | None = None
+) -> MessageSummaryResponse:
     sent_at = utc_datetime(message.sent_at)
     received_at = utc_datetime(message.received_at)
     assert received_at is not None
+    recipient_summary = recipients or summarize_recipients(message.recipients or "")
     return MessageSummaryResponse(
         id=message.id,
         account_id=message.account_id,
         subject=message.subject,
         sender_name=message.sender_name,
         sender_address=message.sender_address,
-        recipients=message.recipients,
+        recipient_count=recipient_summary.count,
+        recipient_preview=recipient_summary.preview,
         sent_at=sent_at,
         received_at=received_at,
         displayed_at=sent_at or received_at,
         status=message.status,
-        should_push=should_push(message.analysis, settings),
+        should_push=message.analysis.should_push if message.analysis else None,
         analysis=analysis_response(message.analysis),
     )
 
@@ -212,18 +225,22 @@ def translation_response(translation: Translation | None) -> TranslationResponse
         text=translation.translated_text,
         target_language=translation.target_language,
         model=translation.model,
+        prompt_tokens=translation.prompt_tokens,
+        completion_tokens=translation.completion_tokens,
         updated_at=updated_at,
     )
 
 
 def serialize_message_detail(
-    message: Message, settings: Settings, channels: dict[str, dict[str, str]]
+    message: Message, channels: dict[str, dict[str, str]]
 ) -> MessageDetailResponse:
-    summary = message_summary(message, settings)
+    recipients = summarize_recipients(message.recipients or "")
+    summary = message_summary(message, recipients)
     return MessageDetailResponse(
         **summary.model_dump(),
         uid=message.uid,
         folder=message.folder,
+        recipient_addresses=list(recipients.addresses),
         text_body=message.text_body,
         translation=translation_response(message.translation),
         notifications=[notification_response(item, channels) for item in message.notifications],

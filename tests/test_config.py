@@ -14,13 +14,12 @@ def test_example_config_is_valid_and_generic() -> None:
     assert settings.ai.response_format == "json_object"
     assert settings.ai.temperature is None
     assert [account.id for account in settings.mail.accounts] == ["university", "legacy_pop3"]
-    assert settings.mail.accounts[0].imap.host == "imap.example.edu.cn"
+    assert settings.mail.accounts[0].imap.host == "imap.example.edu"
     assert settings.mail.accounts[0].protocol == "imap_poll"
     assert settings.mail.accounts[0].pop3 is None
     assert settings.mail.accounts[1].protocol == "pop3_poll"
-    assert "your-personal-address@example.com" in settings.rules.trusted_senders
     assert [account.username for account in settings.mail.accounts] == [
-        "student@example.edu.cn",
+        "student@example.edu",
         "user@example.com",
     ]
     assert settings.notifications.default_channels == []
@@ -33,6 +32,8 @@ def test_example_config_is_valid_and_generic() -> None:
     assert settings.ai.max_output_chars == 100_000
     assert settings.monitor.poll_interval_seconds == 60
     assert settings.monitor.max_message_bytes == 25 * 1024 * 1024
+    assert settings.trust.sender_addresses[0].note == "曾通过独立渠道确认的通知地址"
+    assert settings.trust.link_domains[0].note is None
 
 
 @pytest.mark.parametrize("days", [0, 401])

@@ -40,6 +40,18 @@ def test_dashboard_and_health(tmp_path) -> None:
         assert 'x-show.important="error"' in dashboard.text
         assert "每页" in dashboard.text
         assert "切换页码" in dashboard.text
+        assert 'class="score-badge score-importance"' in dashboard.text
+        assert 'x-for="(mail, index) in messages"' in dashboard.text
+        assert 'x-text="offset + index + 1"' in dashboard.text
+        assert 'class="mail-recipient-summary"' in dashboard.text
+        assert 'class="mail-recipient-ellipsis"' in dashboard.text
+        assert 'x-text="`共 ${mail.recipient_count} 人`"' in dashboard.text
+        assert 'class="score-badge score-risk"' in dashboard.text
+        assert 'class="score-badge score-decision"' in dashboard.text
+        assert 'x-show="mail.should_push"' not in dashboard.text
+        assert "<span>重要</span>" in dashboard.text
+        assert "bi-bookmark-star" in dashboard.text
+        assert "bi-shield-exclamation" in dashboard.text
         assert "匿名访问" in dashboard.text
         assert ">退出<" not in dashboard.text
         assert client.get("/static/vendor/bootstrap/bootstrap.min.css").status_code == 200
@@ -72,9 +84,9 @@ def test_account_overview_includes_mailbox_address(tmp_path) -> None:
                 {
                     "id": "university",
                     "name": "学校邮箱",
-                    "username": "student@example.edu.cn",
+                    "username": "student@example.edu",
                     "protocol": "imap_poll",
-                    "imap": {"host": "imap.example.edu.cn"},
+                    "imap": {"host": "imap.example.edu"},
                     "enabled": False,
                 }
             ]
@@ -82,7 +94,7 @@ def test_account_overview_includes_mailbox_address(tmp_path) -> None:
     )
     with TestClient(create_app(settings)) as client:
         account = client.get("/api/v1/accounts").json()[0]
-        assert account["username"] == "student@example.edu.cn"
+        assert account["username"] == "student@example.edu"
         assert account["status"] == "disabled"
 
 
@@ -113,6 +125,7 @@ def test_web_shows_push_title_channel_and_delivery_status(tmp_path) -> None:
                 uid=1,
                 subject="原始主题",
                 sender_address="sender@example.com",
+                recipients=", ".join(f"person{i}@example.org" for i in range(5)),
                 received_at=datetime.now(UTC),
                 status="completed",
             )
@@ -125,7 +138,8 @@ def test_web_shows_push_title_channel_and_delivery_status(tmp_path) -> None:
                     prompt_version="test",
                     title_zh="课程安排有更新",
                     summary_zh="摘要",
-                    push_recommended=True,
+                    should_push=True,
+                    push_reason="需要即时查看",
                     raw_json="{}",
                 )
             )
@@ -160,16 +174,35 @@ def test_web_shows_push_title_channel_and_delivery_status(tmp_path) -> None:
         pushed = next(item for item in messages["items"] if item["id"] == message_id)
         assert pushed["analysis"]["title"] == "课程安排有更新"
         assert pushed["should_push"] is True
+        assert pushed["analysis"]["push_reason"] == "需要即时查看"
+        assert pushed["recipient_count"] == 5
+        assert "person2@example.org" in pushed["recipient_preview"]
+        assert "person4@example.org" not in json.dumps(pushed)
+        assert "recipients" not in pushed
 
         push_only = client.get("/api/v1/messages?push=true")
         assert push_only.status_code == 200
         assert [item["id"] for item in push_only.json()["items"]] == [message_id]
+        risky_only = client.get("/api/v1/messages?min_risk_score=0.5")
+        assert risky_only.status_code == 200
+        assert risky_only.json()["items"] == []
 
         detail = client.get(f"/messages/{message_id}")
+        assert 'class="score-badge score-risk"' in detail.text
+        assert 'class="score-badge score-importance"' in detail.text
+        assert 'class="score-badge score-decision"' in detail.text
+        assert "'✓' : '✕'" in detail.text
+        assert 'class="analysis-badges"' in detail.text
+        assert 'class="analysis-meta"' in detail.text
         assert "/static/message.js?v=" in detail.text
         assert f'x-data="messagePage({message_id})"' in detail.text
         assert "返回首页" in detail.text
         assert "下载 EML" in detail.text
+        assert "展开全部" in detail.text
+        assert 'class="recipient-summary"' in detail.text
+        assert 'class="recipient-ellipsis"' in detail.text
+        assert 'x-for="(address, index) in recipientList"' in detail.text
+        assert "复制全部地址" in detail.text
         assert '@click="runTranslation()"' in detail.text
         assert ':disabled="translating"' in detail.text
         assert ':disabled="action !== null"' in detail.text
@@ -177,6 +210,9 @@ def test_web_shows_push_title_channel_and_delivery_status(tmp_path) -> None:
         assert "←" not in detail.text
         api_detail = client.get(f"/api/v1/messages/{message_id}").json()
         assert api_detail["should_push"] is True
+        assert api_detail["recipient_count"] == 5
+        assert "person4@example.org" in api_detail["recipient_addresses"]
+        assert "recipients" not in api_detail
         assert api_detail["notifications"][0] == {
             "channel": "wecom_app",
             "channel_type": "企业微信应用",
@@ -213,9 +249,13 @@ def test_message_translation_is_cached_and_can_be_refreshed(tmp_path, monkeypatc
 
         translate_calls = 0
 
-        async def stream_translation(message, prompt):
+        async def stream_translation(message, prompt, *, on_usage=None):
             nonlocal translate_calls
             translate_calls += 1
+            if on_usage:
+                from inboxping.ai.client import TokenUsage
+
+                on_usage(TokenUsage(prompt_tokens=20, completion_tokens=8))
             yield "会议于"
             yield "上午十点开始。"
 
@@ -239,6 +279,8 @@ def test_message_translation_is_cached_and_can_be_refreshed(tmp_path, monkeypatc
         detail = client.get(f"/api/v1/messages/{message_id}").json()
         assert detail["translation"]["text"] == "会议于上午十点开始。"
         assert detail["translation"]["target_language"] == "zh-CN"
+        assert detail["translation"]["prompt_tokens"] == 20
+        assert detail["translation"]["completion_tokens"] == 8
 
         original_export = client.get(f"/api/v1/messages/{message_id}/export/original.md")
         assert original_export.status_code == 200
@@ -305,7 +347,7 @@ def test_streaming_translation_reports_failure_without_caching_partial_text(tmp_
             session.flush()
             message_id = message.id
 
-        async def failing_stream(message, prompt):
+        async def failing_stream(message, prompt, *, on_usage=None):
             yield "部分译文"
             raise TimeoutError
 
@@ -360,7 +402,7 @@ def test_dashboard_orders_by_displayed_mail_time(tmp_path) -> None:
         ]
 
 
-def test_manual_notification_cannot_bypass_risk_suppression(tmp_path) -> None:
+def test_manual_notification_cannot_bypass_ai_no_push_decision(tmp_path) -> None:
     settings = Settings(
         storage={"database_url": f"sqlite:///{tmp_path / 'test.db'}"},
         web={"session_secret": "test-secret", "password_hash": ""},
@@ -385,8 +427,9 @@ def test_manual_notification_cannot_bypass_risk_suppression(tmp_path) -> None:
                     prompt_version="test",
                     title_zh="危险邮件",
                     summary_zh="摘要",
-                    risk_level="high",
-                    push_recommended=True,
+                    risk_score=0.9,
+                    should_push=False,
+                    push_reason="AI 判断无需通知",
                     raw_json="{}",
                 )
             )
@@ -394,7 +437,7 @@ def test_manual_notification_cannot_bypass_risk_suppression(tmp_path) -> None:
 
         response = client.post(f"/api/v1/messages/{message_id}/notify")
         assert response.status_code == 409
-        assert "禁止推送" in response.json()["detail"]
+        assert "AI 判断无需通知" in response.json()["detail"]
 
 
 def test_authored_web_assets_do_not_use_dash_or_arrow_placeholders() -> None:

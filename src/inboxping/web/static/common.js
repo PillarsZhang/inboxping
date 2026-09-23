@@ -76,12 +76,6 @@ window.InboxPing = (() => {
     }).format(new Date(value)).replaceAll("/", "-");
   }
 
-  const riskLabels = {
-    high: "高风险",
-    medium: "中风险",
-    low: "低风险",
-    unknown: "风险未知",
-  };
   const deliveryLabels = { sent: "已推送", failed: "失败", pending: "待发送" };
   const accountStatusLabels = {
     connected: "已连接",
@@ -90,5 +84,19 @@ window.InboxPing = (() => {
     disabled: "已停用",
   };
 
-  return { apiFetch, streamNdjson, formatDate, riskLabels, deliveryLabels, accountStatusLabels };
+  const categoryLabels = {
+    academic: "学术事务",
+    administrative: "行政事务",
+    security: "安全通知",
+    personal: "个人邮件",
+    newsletter: "资讯简报",
+    advertising: "广告推广",
+    other: "其他",
+  };
+
+  function categoryLabel(value) {
+    return categoryLabels[value] || value || "未分类";
+  }
+
+  return { apiFetch, streamNdjson, formatDate, deliveryLabels, accountStatusLabels, categoryLabel };
 })();

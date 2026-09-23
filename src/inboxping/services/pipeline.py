@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import time
 import weakref
 from collections.abc import AsyncIterator
@@ -12,52 +11,17 @@ from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from inboxping.ai.client import AIClient
+from inboxping.ai.client import AIClient, TokenUsage
 from inboxping.ai.prompts import load_prompt, load_translation_prompt, validate_prompt_files
-from inboxping.ai.schema import AnalysisResult, Risk
 from inboxping.config import Settings
 from inboxping.db import Database
 from inboxping.models import Analysis, Event, Message, Notification, Translation
 from inboxping.notify.manager import NotificationManager
-from inboxping.services.push_policy import notification_reasons, suppression_reason
+from inboxping.services.push_policy import should_push
 
 
 class NotificationSuppressedError(RuntimeError):
-    """Raised when an explicit delivery request violates the safety policy."""
-
-
-def local_fallback(message: Message, reason: str) -> AnalysisResult:
-    text = f"{message.subject}\n{message.text_body}".lower()
-    risk_terms = (
-        "验证码",
-        "password",
-        "密码",
-        "转账",
-        "汇款",
-        "账号冻结",
-        "verify account",
-        "登录验证",
-    )
-    action_terms = ("截止", "请于", "必须", "提交", "确认", "deadline", "required")
-    risky = any(term in text for term in risk_terms)
-    action = any(term in text for term in action_terms)
-    urls = re.findall(r"https?://[^\s<>]+", text)
-    summary = (message.text_body.strip() or message.subject)[:180].replace("\n", " ")
-    return AnalysisResult(
-        title_zh=f"需人工查看：{message.subject}"[:80],
-        summary_zh=f"[本地降级分析] {summary}",
-        importance=0.75 if action or risky else 0.35,
-        risk=Risk(
-            level="medium" if risky else "unknown",
-            types=["suspicious_request"] if risky else [],
-            reason=f"AI 不可用（{reason[:80]}）；本地规则发现 {len(urls)} 个链接"
-            if risky
-            else "AI 不可用，仅完成本地基础检查",
-        ),
-        action_required=action,
-        action_text="请人工核对邮件内容与发件人" if action or risky else "",
-        push_recommended=action or risky,
-    )
+    """Raised when there is no valid AI decision to send a notification."""
 
 
 class Pipeline:
@@ -86,7 +50,7 @@ class Pipeline:
             )
             if message.analysis and not force:
                 analysis = message.analysis
-                should_notify = self._should_notify(analysis)
+                should_notify = should_push(analysis)
                 log.info("复用已有分析结果")
             else:
                 analysis = None
@@ -99,14 +63,17 @@ class Pipeline:
                 message = session.get(Message, message_id)
                 assert message is not None
             try:
-                result = await self.ai.analyze(message, prompt)
+                analyzed = await self.ai.analyze(message, prompt)
+                result = analyzed.result
+                usage = analyzed.usage
                 model = self.settings.ai.model
                 analysis_error = None
             except Exception as exc:
-                log.exception("AI 分析失败，使用本地规则降级")
-                result = local_fallback(message, str(exc))
-                model = "local-fallback"
-                analysis_error = str(exc)
+                log.exception("AI 分析失败，留待人工查看")
+                result = None
+                usage = None
+                model = "unavailable"
+                analysis_error = f"{type(exc).__name__}: {exc}"
 
             with self.db.session() as session:
                 message = session.get(Message, message_id)
@@ -115,51 +82,58 @@ class Pipeline:
                 analysis = message.analysis or Analysis(message_id=message.id)
                 analysis.model = model
                 analysis.prompt_version = prompt.version
-                analysis.title_zh = result.title_zh
-                analysis.summary_zh = result.summary_zh
-                analysis.category = result.category
-                analysis.importance = result.importance
-                analysis.risk_level = result.risk.level
-                analysis.risk_types_json = json.dumps(result.risk.types, ensure_ascii=False)
-                analysis.risk_reason = result.risk.reason
-                analysis.action_required = result.action_required
-                analysis.action_text = result.action_text
-                analysis.deadline = result.deadline
-                analysis.push_recommended = result.push_recommended
-                analysis.raw_json = result.model_dump_json()
+                analysis.title_zh = result.title_zh if result else ""
+                analysis.summary_zh = result.summary_zh if result else "AI 分析失败，待人工查看"
+                analysis.category = result.category if result else "other"
+                analysis.importance_score = result.importance_score if result else None
+                analysis.risk_score = result.risk.score if result else None
+                analysis.prompt_tokens = usage.prompt_tokens if usage else None
+                analysis.completion_tokens = usage.completion_tokens if usage else None
+                analysis.risk_types_json = (
+                    json.dumps(result.risk.types, ensure_ascii=False) if result else "[]"
+                )
+                analysis.risk_reason = result.risk.reason if result else ""
+                analysis.action_required = result.action_required if result else False
+                analysis.action_text = result.action_text if result else ""
+                analysis.deadline = result.deadline if result else None
+                analysis.should_push = result.should_push if result else None
+                analysis.push_reason = result.push_reason if result else "AI 未完成分析，无推送决定"
+                analysis.raw_json = result.model_dump_json() if result else "{}"
                 if not message.analysis:
                     session.add(analysis)
-                message.status = "analyzed" if analysis_error is None else "fallback"
+                message.status = "analyzed" if analysis_error is None else "analysis_failed"
                 message.error = analysis_error
-                should_notify = self._should_notify(analysis)
+                should_notify = should_push(analysis)
                 session.add(
                     Event(
                         level="info" if analysis_error is None else "warning",
-                        kind="analysis_completed",
+                        kind="analysis_completed" if analysis_error is None else "analysis_failed",
                         account_id=message.account_id,
                         message=(
-                            f"邮件分析完成，本地ID={message.id}，UID={message.uid}，"
-                            f"分类={analysis.category}，风险={analysis.risk_level}，模型={model}"
+                            f"邮件分析{'完成' if analysis_error is None else '失败'}，"
+                            f"本地ID={message.id}，UID={message.uid}，"
+                            f"分类={analysis.category}，风险分={analysis.risk_score}，"
+                            f"推送={should_notify}，模型={model}"
                         ),
                     )
                 )
-                log.bind(
+                outcome_log = log.bind(
                     model=model,
                     category=analysis.category,
-                    risk=analysis.risk_level,
-                    importance=f"{analysis.importance:.2f}",
-                ).info("邮件分析完成")
+                    risk=analysis.risk_score,
+                    importance=analysis.importance_score,
+                )
+                if analysis_error is None:
+                    outcome_log.info("邮件分析完成")
+                else:
+                    outcome_log.warning("邮件分析失败，未形成推送决定")
 
-        suppression_reason = self._notification_suppression_reason(analysis)
-        reasons = self._notification_reasons(analysis)
         if not notify:
             log.info("通知决策: 不发送（本次处理关闭通知）")
-        elif suppression_reason:
-            log.info("通知决策: 不发送（{}）", suppression_reason)
         elif should_notify:
-            log.info("通知决策: 发送（{}）", "、".join(reasons))
+            log.info("通知决策: 发送（{}）", analysis.push_reason)
         else:
-            log.info("通知决策: 不发送（未命中推送规则）")
+            log.info("通知决策: 不发送（{}）", analysis.push_reason)
 
         if notify and should_notify:
             try:
@@ -197,6 +171,12 @@ class Pipeline:
         )
         started_at = time.monotonic()
         chunks: list[str] = []
+        usage: TokenUsage | None = None
+
+        def record_usage(value: TokenUsage) -> None:
+            nonlocal usage
+            usage = value
+
         async with lock:
             with self.db.session() as session:
                 session.add(
@@ -212,7 +192,9 @@ class Pipeline:
                 )
             log.info("开始流式翻译邮件全文")
             try:
-                async for chunk in self.ai.stream_translation(message, prompt):
+                async for chunk in self.ai.stream_translation(
+                    message, prompt, on_usage=record_usage
+                ):
                     if not chunks:
                         log.info(
                             "收到首个翻译片段，首字延迟={:.2f}s",
@@ -265,6 +247,8 @@ class Pipeline:
                 translation.prompt_version = prompt.version
                 translation.target_language = "zh-CN"
                 translation.translated_text = translated_text
+                translation.prompt_tokens = usage.prompt_tokens if usage else None
+                translation.completion_tokens = usage.completion_tokens if usage else None
                 if message.translation is None:
                     session.add(translation)
                 session.add(
@@ -337,15 +321,6 @@ class Pipeline:
                 )
             )
 
-    def _should_notify(self, analysis: Analysis) -> bool:
-        return bool(self._notification_reasons(analysis))
-
-    def _notification_suppression_reason(self, analysis: Analysis) -> str | None:
-        return suppression_reason(analysis, self.settings)
-
-    def _notification_reasons(self, analysis: Analysis) -> list[str]:
-        return notification_reasons(analysis, self.settings)
-
     async def send_notification(
         self, message_id: int, *, force: bool = False, channel_id: str | None = None
     ) -> None:
@@ -353,14 +328,15 @@ class Pipeline:
             message = session.get(Message, message_id)
             if message is None or message.analysis is None:
                 raise LookupError("邮件或分析结果不存在")
-            suppression_reason = self._notification_suppression_reason(message.analysis)
+            decision = should_push(message.analysis)
+            decision_reason = message.analysis.push_reason
             account_id = message.account_id
             uid = message.uid
-        if suppression_reason:
+        if not decision:
             logger.bind(account=account_id, message_id=message_id, uid=uid).info(
-                "通知已抑制: {}", suppression_reason
+                "通知未发送: {}", decision_reason
             )
-            raise NotificationSuppressedError(suppression_reason)
+            raise NotificationSuppressedError(decision_reason or "AI 未决定推送")
 
         channel_ids = [channel_id] if channel_id else self.notifier.default_channel_ids
         if not channel_ids:
