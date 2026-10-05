@@ -66,6 +66,132 @@ def test_markdown_autolinks_stop_at_chinese_punctuation() -> None:
             assert soup.get_text().strip() == source
 
 
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is needed to run dashboard")
+def test_dashboard_selection_and_bulk_actions() -> None:
+    script = """
+        const assert = require('node:assert/strict');
+        const fs = require('node:fs');
+        const vm = require('node:vm');
+        let items = [
+            { id: 1, subject: 'First', should_push: true },
+            { id: 2, subject: 'Second', should_push: false },
+            { id: 3, subject: 'Third', should_push: null },
+            { id: 4, subject: 'Fourth', should_push: true },
+        ];
+        const calls = [];
+        let releaseFirst;
+        const context = {
+            window: {}, URLSearchParams,
+            history: { replaceState() {} }, location: { pathname: '/' },
+            InboxPing: {
+                async apiFetch(url, options = {}) {
+                    calls.push({ url, method: options.method || 'GET' });
+                    if (url === '/api/v1/overview') return { stats: {} };
+                    if (url.startsWith('/api/v1/messages?')) return { items, total: 40 };
+                    if (url === '/api/v1/messages/1/reanalyze') {
+                        return new Promise(resolve => { releaseFirst = resolve; });
+                    }
+                    if (url === '/api/v1/messages/2/reanalyze') return { status: 'failed' };
+                    if (url === '/api/v1/messages/3/reanalyze') {
+                        throw new Error('Connection failed');
+                    }
+                    if (url === '/api/v1/messages/4/notify') throw new Error('Delivery failed');
+                    return { status: 'completed' };
+                },
+            },
+        };
+        vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), context);
+        const page = context.window.dashboardPage();
+        const ids = () => Array.from(page.selectedIds);
+        const posts = () => calls.filter(call => call.method === 'POST').map(call => call.url);
+        (async () => {
+            await page.loadMessages();
+            assert.equal(page.allSelected, false);
+            page.toggleSelection(1, true);
+            page.toggleSelection(1, true);
+            assert.deepEqual(ids(), [1]);
+            assert.equal(page.partiallySelected, true);
+            page.toggleSelection(1, false);
+            assert.deepEqual(ids(), []);
+            page.toggleAll(true);
+            assert.deepEqual(ids(), [1, 2, 3, 4]);
+            assert.equal(page.allSelected, true);
+            assert.equal(page.partiallySelected, false);
+            assert.equal(page.selectedPushCount, 2);
+
+            const analyzing = page.runBulkAction('reanalyze');
+            assert.equal(page.bulkProgress, '正在分析 1/4 封');
+            assert.equal(page.activeMessageId, 1);
+            await page.runBulkAction('reanalyze');
+            await page.runBulkAction('notify');
+            await page.runBulkAction('reanalyze', [items[3]]);
+            await page.refresh();
+            page.toggleAll(false);
+            page.toggleSelection(1, false);
+            page.goToPage(2);
+            assert.deepEqual(ids(), [1, 2, 3, 4]);
+            assert.equal(page.offset, 0);
+            assert.deepEqual(posts(), ['/api/v1/messages/1/reanalyze']);
+            releaseFirst({ status: 'completed' });
+            await analyzing;
+            assert.deepEqual(posts(), [1, 2, 3, 4].map(id => `/api/v1/messages/${id}/reanalyze`));
+            assert.equal(page.bulkResult, '分析完成：成功 2 封，失败 2 封。');
+            assert.deepEqual(Array.from(page.bulkErrors, item => item.id), [2, 3]);
+            assert.equal(page.bulkAction, null);
+            assert.equal(page.activeMessageId, null);
+            assert.equal(page.bulkProgress, '');
+            assert.deepEqual(ids(), [1, 2, 3, 4]);
+
+            await page.runBulkAction('notify');
+            assert.deepEqual(posts().filter(url => url.endsWith('/notify')), [
+                '/api/v1/messages/1/notify', '/api/v1/messages/4/notify',
+            ]);
+            assert.equal(page.bulkResult, '推送完成：成功 1 封，失败 1 封，跳过 2 封。');
+            assert.equal(page.bulkErrors[0].message, 'Delivery failed');
+            assert.equal(page.bulkAction, null);
+            page.toggleAll(false);
+
+            const previousPostCount = posts().length;
+            await page.runBulkAction('reanalyze', [items[3]]);
+            await page.runBulkAction('notify', [items[0]]);
+            await page.runBulkAction('notify', [items[1]]);
+            assert.deepEqual(posts().slice(previousPostCount), [
+                '/api/v1/messages/4/reanalyze', '/api/v1/messages/1/notify',
+            ]);
+            assert.deepEqual(ids(), []);
+            assert.equal(page.bulkResult, '推送完成：成功 1 封，失败 0 封。');
+            const count = calls.length;
+            await page.runBulkAction('notify');
+            await page.runBulkAction('reanalyze');
+            assert.equal(calls.length, count);
+
+            page.toggleAll(true);
+            items = items.slice(0, 3);
+            await page.loadMessages();
+            assert.deepEqual(ids(), [1, 2, 3]);
+            for (const navigate of [
+                () => page.goToPage(2), () => page.changePageSize(), () => page.applyFilters(),
+            ]) {
+                page.toggleAll(true);
+                navigate();
+                assert.deepEqual(ids(), []);
+                assert.equal(page.bulkResult, '');
+                assert.equal(page.bulkErrors.length, 0);
+                await new Promise(setImmediate);
+            }
+            process.stdout.write('completed');
+        })().catch(error => { console.error(error); process.exitCode = 1; });
+    """
+    result = subprocess.run(
+        ["node", "-e", script, str(Path("src/inboxping/web/static/dashboard.js").resolve())],
+        text=True,
+        capture_output=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "completed"
+
+
 def test_dashboard_and_health(tmp_path) -> None:
     settings = Settings(
         storage={"database_url": f"sqlite:///{tmp_path / 'test.db'}"},
@@ -94,6 +220,9 @@ def test_dashboard_and_health(tmp_path) -> None:
         assert 'x-show.important="error"' in dashboard.text
         assert "每页" in dashboard.text
         assert "切换页码" in dashboard.text
+        assert "全选当前页" in dashboard.text
+        assert "分析选中" in dashboard.text
+        assert "推送选中" in dashboard.text
         assert 'class="score-badge score-importance"' in dashboard.text
         assert 'x-for="(mail, index) in messages"' in dashboard.text
         assert 'x-text="offset + index + 1"' in dashboard.text
@@ -284,7 +413,7 @@ def test_web_shows_push_title_channel_and_delivery_status(tmp_path) -> None:
         }
 
 
-def test_message_without_analysis_can_be_manually_analyzed(tmp_path, monkeypatch) -> None:
+def test_manual_analysis_supports_first_analysis_failure_and_retry(tmp_path, monkeypatch) -> None:
     settings = Settings(
         storage={"database_url": f"sqlite:///{tmp_path / 'test.db'}"},
         web={"session_secret": "test-secret", "password_hash": ""},
@@ -308,6 +437,7 @@ def test_message_without_analysis_can_be_manually_analyzed(tmp_path, monkeypatch
 
         analysis_calls = []
         notification_calls = []
+        push_decision = True
 
         async def analyze(message, prompt):
             analysis_calls.append(message.text_body)
@@ -318,7 +448,7 @@ def test_message_without_analysis_can_be_manually_analyzed(tmp_path, monkeypatch
                     category="administrative",
                     importance_score=0.7,
                     risk={"score": 0.1},
-                    should_push=True,
+                    should_push=push_decision,
                     push_reason="会议安排需要查看",
                 ),
                 usage=TokenUsage(prompt_tokens=100, completion_tokens=50),
@@ -338,6 +468,7 @@ def test_message_without_analysis_can_be_manually_analyzed(tmp_path, monkeypatch
         for _ in range(2):
             response = client.post(f"/api/v1/messages/{message_id}/reanalyze")
             assert response.status_code == 200
+            assert response.json()["status"] == "completed"
             detail = client.get(f"/api/v1/messages/{message_id}").json()
             assert detail["status"] == "analyzed"
             assert detail["analysis"]["title"] == "会议时间更新"
@@ -347,6 +478,25 @@ def test_message_without_analysis_can_be_manually_analyzed(tmp_path, monkeypatch
             assert detail["notifications"] == []
 
         assert analysis_calls == [before["text_body"], before["text_body"]]
+        assert notification_calls == []
+
+        async def failing_analysis(message, prompt):
+            raise TimeoutError("AI service unavailable")
+
+        monkeypatch.setattr(client.app.state.pipeline.ai, "analyze", failing_analysis)
+        failed = client.post(f"/api/v1/messages/{message_id}/reanalyze")
+        assert failed.status_code == 200
+        assert failed.json() == {"status": "failed", "message_id": message_id}
+        detail = client.get(f"/api/v1/messages/{message_id}").json()
+        assert detail["status"] == "analysis_failed"
+        assert detail["should_push"] is None
+        assert notification_calls == []
+
+        monkeypatch.setattr(client.app.state.pipeline.ai, "analyze", analyze)
+        push_decision = False
+        retried = client.post(f"/api/v1/messages/{message_id}/reanalyze")
+        assert retried.json()["status"] == "completed"
+        assert client.get(f"/api/v1/messages/{message_id}").json()["should_push"] is False
         assert notification_calls == []
         assert client.post("/api/v1/messages/99999/reanalyze").status_code == 404
 
@@ -636,6 +786,8 @@ def test_login_is_long_lived_and_preserves_username_after_failure(tmp_path) -> N
     with TestClient(create_app(settings)) as client:
         failed = client.post("/login", data={"username": "admin", "password": "wrong-password"})
         assert client.post("/api/v1/messages/1/refresh-body").status_code == 401
+        assert client.post("/api/v1/messages/1/reanalyze").status_code == 401
+        assert client.post("/api/v1/messages/1/notify").status_code == 401
         assert failed.status_code == 401
         assert 'value="admin"' in failed.text
 

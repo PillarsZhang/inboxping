@@ -5,7 +5,7 @@
     <div>
       <h1 class="display-6 fw-bold mb-0">邮件首页</h1>
     </div>
-    <button class="btn btn-outline-primary align-self-start" type="button" @click="refresh" :disabled="loadingOverview || loadingMessages">
+    <button class="btn btn-outline-primary align-self-start" type="button" @click="refresh" :disabled="loadingOverview || loadingMessages || bulkAction !== null">
       <span class="spinner-border spinner-border-sm me-1" x-show="loadingOverview || loadingMessages" aria-hidden="true"></span>
       <i class="bi bi-arrow-clockwise me-1" x-show="!loadingOverview && !loadingMessages" aria-hidden="true"></i>刷新
     </button>
@@ -110,34 +110,60 @@
         <h2 class="h4 mb-1">邮件</h2>
         <p class="text-secondary small mb-0" x-text="loadingMessages ? '正在加载邮件' : `共 ${total} 封，当前显示 ${pageStart}–${pageEnd}`"></p>
       </div>
-      <form class="filter-bar" @submit.prevent="applyFilters">
-        <select class="form-select form-select-sm" aria-label="邮箱账户" x-model="account">
-          <option value="">全部账户</option>
-          <template x-for="accountItem in overview?.accounts || []" :key="accountItem.id">
-            <option :value="accountItem.id" x-text="accountItem.name"></option>
-          </template>
-        </select>
-        <select class="form-select form-select-sm" aria-label="最低风险分" x-model="minRiskScore">
-          <option value="">全部风险分</option><option value="0.25">风险分 ≥ 25%</option><option value="0.5">风险分 ≥ 50%</option><option value="0.75">风险分 ≥ 75%</option>
-        </select>
-        <button class="btn btn-primary btn-sm" type="submit"><i class="bi bi-funnel me-1" aria-hidden="true"></i>筛选</button>
-        <button class="btn btn-sm" :class="pushOnly ? 'btn-success' : 'btn-outline-secondary'" type="button" @click="togglePush"><i class="bi bi-send-check me-1" aria-hidden="true"></i>推送</button>
-        <button class="btn btn-link btn-sm text-secondary text-decoration-none" type="button" @click="clearFilters">清除</button>
+      <form @submit.prevent="applyFilters">
+        <fieldset class="filter-bar" :disabled="loadingMessages || bulkAction !== null">
+          <select class="form-select form-select-sm" aria-label="邮箱账户" x-model="account">
+            <option value="">全部账户</option>
+            <template x-for="accountItem in overview?.accounts || []" :key="accountItem.id">
+              <option :value="accountItem.id" x-text="accountItem.name"></option>
+            </template>
+          </select>
+          <select class="form-select form-select-sm" aria-label="最低风险分" x-model="minRiskScore">
+            <option value="">全部风险分</option><option value="0.25">风险分 ≥ 25%</option><option value="0.5">风险分 ≥ 50%</option><option value="0.75">风险分 ≥ 75%</option>
+          </select>
+          <button class="btn btn-primary btn-sm" type="submit"><i class="bi bi-funnel me-1" aria-hidden="true"></i>筛选</button>
+          <button class="btn btn-sm" :class="pushOnly ? 'btn-success' : 'btn-outline-secondary'" type="button" @click="togglePush"><i class="bi bi-send-check me-1" aria-hidden="true"></i>需推送</button>
+          <button class="btn btn-link btn-sm text-secondary text-decoration-none" type="button" @click="clearFilters">清除</button>
+        </fieldset>
       </form>
     </div>
 
+    <div class="alert py-2" :class="bulkErrors.length ? 'alert-warning' : 'alert-success'" role="status" aria-live="polite" x-show="bulkResult">
+      <span x-text="bulkResult"></span>
+      <ul class="mb-0 mt-2" x-show="bulkErrors.length">
+        <template x-for="failure in bulkErrors" :key="failure.id">
+          <li><a :href="`/messages/${failure.id}`" x-text="failure.subject"></a><span x-text="`：${failure.message}`"></span></li>
+        </template>
+      </ul>
+    </div>
+
     <div class="card mail-card" :class="{ 'mail-card-loading': loadingMessages && messages.length }" :aria-busy="loadingMessages">
+      <div class="d-flex flex-wrap align-items-center gap-3 px-3 py-2 border-bottom" x-show="messages.length">
+        <label class="mail-select d-flex align-items-center gap-2 small mb-0" :class="{ 'mail-select-disabled': loadingMessages || bulkAction !== null }" for="select-page">
+          <input class="form-check-input mt-0" id="select-page" type="checkbox" :checked="allSelected" x-effect="$el.indeterminate = partiallySelected" @change="toggleAll($event.target.checked)" :disabled="loadingMessages || bulkAction !== null">
+          全选当前页
+        </label>
+        <span class="text-secondary small" x-text="`已选 ${selectedMessages.length} 封`"></span>
+        <div class="d-flex flex-wrap gap-2 ms-auto">
+          <button class="btn btn-primary btn-sm" type="button" @click="runBulkAction('reanalyze')" :disabled="{{ 'true' if demo_mode else 'false' }} || loadingMessages || bulkAction !== null || !selectedMessages.length"><i class="bi bi-stars me-1" aria-hidden="true"></i><span x-text="`分析选中（${selectedMessages.length}）`"></span></button>
+          <button class="btn btn-outline-secondary btn-sm" type="button" @click="runBulkAction('notify')" :disabled="{{ 'true' if demo_mode else 'false' }} || loadingMessages || bulkAction !== null || !selectedPushCount"><i class="bi bi-send me-1" aria-hidden="true"></i><span x-text="`推送选中（${selectedPushCount}）`"></span></button>
+        </div>
+        <span class="text-secondary small w-100" role="status" aria-live="polite" x-show="bulkAction"><span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span><span x-text="bulkProgress"></span></span>
+      </div>
       <div class="mail-loading-indicator" x-show="loadingMessages && messages.length"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span>正在加载</div>
       <div class="loading-state" x-show="loadingMessages && !messages.length"><span class="spinner-border text-primary" aria-hidden="true"></span><span>正在加载邮件</span></div>
       <div class="empty-state" x-show="!loadingMessages && !messages.length"><i class="bi bi-inbox" aria-hidden="true"></i><p>当前条件下没有邮件</p></div>
       <div class="list-group list-group-flush" x-show="messages.length">
         <template x-for="(mail, index) in messages" :key="mail.id">
           <article class="list-group-item mail-item" :class="{ 'mail-item-push': mail.should_push }">
-            <div class="mail-time">
-              <span class="mail-list-index" :aria-label="`列表第 ${offset + index + 1} 封`" x-text="offset + index + 1"></span>
+            <label class="mail-time mail-select" :class="{ 'mail-select-checked': selectedIds.includes(mail.id), 'mail-select-disabled': loadingMessages || bulkAction !== null }">
+              <span class="d-flex align-items-center gap-2">
+                <input class="form-check-input mt-0" type="checkbox" :checked="selectedIds.includes(mail.id)" @change="toggleSelection(mail.id, $event.target.checked)" :aria-label="`选择邮件：${mail.subject}`" :disabled="loadingMessages || bulkAction !== null">
+                <span class="mail-list-index" :aria-label="`列表第 ${offset + index + 1} 封`" x-text="offset + index + 1"></span>
+              </span>
               <time x-text="formatDate(mail.displayed_at).slice(5)"></time>
               <span class="text-secondary" x-text="mail.account_id"></span>
-            </div>
+            </label>
             <div class="mail-identity">
               <span class="field-label">发件人</span>
               <strong class="mail-sender" x-text="mail.sender_name || mail.sender_address || '未记录'"></strong>
@@ -149,16 +175,41 @@
                 <span class="mail-recipient-count" x-show="mail.recipient_count > 1" x-text="`共 ${mail.recipient_count} 人`"></span>
               </span>
             </div>
-            <div class="mail-copy">
+            <a class="mail-copy" :href="`/messages/${mail.id}`" :aria-label="`查看邮件详情：${mail.subject}`">
               <span class="analysis-title" x-show="mail.analysis?.title" x-text="mail.analysis?.title"></span>
-              <a class="mail-subject" :href="`/messages/${mail.id}`" x-text="mail.subject"></a>
+              <span class="mail-subject" x-text="mail.subject"></span>
               <p x-text="mail.analysis?.summary || (mail.status === 'pending' ? '等待分析' : '尚无分析结果')"></p>
-            </div>
-            <div class="mail-flags">
-              <span class="score-badge score-importance"><i class="bi bi-bookmark-star" aria-hidden="true"></i><span>重要</span><strong x-text="mail.analysis?.importance_score != null ? `${Math.round(mail.analysis.importance_score * 100)}%` : '待分析'"></strong></span>
-              <span class="score-badge score-risk"><i class="bi bi-shield-exclamation" aria-hidden="true"></i><span>风险</span><strong x-text="mail.analysis?.risk_score != null ? `${Math.round(mail.analysis.risk_score * 100)}%` : '待分析'"></strong></span>
-              <span class="score-badge score-decision" :class="mail.should_push == null ? 'score-undecided' : (mail.should_push ? 'score-push' : 'score-no-push')" :aria-label="mail.should_push == null ? '推送待判定' : (mail.should_push ? '需要推送' : '不需要推送')"><i class="bi bi-send" aria-hidden="true"></i><span>推送</span><strong x-text="mail.should_push == null ? '…' : (mail.should_push ? '✓' : '✕')"></strong></span>
-            </div>
+            </a>
+            <fieldset class="mail-flags" aria-label="邮件分析与推送操作" :disabled="{{ 'true' if demo_mode else 'false' }} || loadingMessages || bulkAction !== null">
+              <button class="score-badge score-importance" type="button"
+                      @click="runBulkAction('reanalyze', [mail])"
+                      :title="mail.analysis ? '重新分析这封邮件' : '分析这封邮件'"
+                      :aria-label="`${mail.analysis ? '重新分析' : '分析'}邮件：${mail.subject}`">
+                <span class="spinner-border spinner-border-sm" x-show="bulkAction === 'reanalyze' && activeMessageId === mail.id" aria-hidden="true"></span>
+                <i class="bi bi-bookmark-star" x-show="bulkAction !== 'reanalyze' || activeMessageId !== mail.id" aria-hidden="true"></i>
+                <span>重要</span>
+                <strong x-text="mail.analysis?.importance_score != null ? `${Math.round(mail.analysis.importance_score * 100)}%` : '待分析'"></strong>
+              </button>
+              <button class="score-badge score-risk" type="button"
+                      @click="runBulkAction('reanalyze', [mail])"
+                      :title="mail.analysis ? '重新分析这封邮件' : '分析这封邮件'"
+                      :aria-label="`${mail.analysis ? '重新分析' : '分析'}邮件：${mail.subject}`">
+                <span class="spinner-border spinner-border-sm" x-show="bulkAction === 'reanalyze' && activeMessageId === mail.id" aria-hidden="true"></span>
+                <i class="bi bi-shield-exclamation" x-show="bulkAction !== 'reanalyze' || activeMessageId !== mail.id" aria-hidden="true"></i>
+                <span>风险</span>
+                <strong x-text="mail.analysis?.risk_score != null ? `${Math.round(mail.analysis.risk_score * 100)}%` : '待分析'"></strong>
+              </button>
+              <button class="score-badge score-decision" type="button"
+                      @click="runBulkAction('notify', [mail])" :disabled="mail.should_push !== true"
+                      :class="mail.should_push == null ? 'score-undecided' : (mail.should_push ? 'score-push' : 'score-no-push')"
+                      :title="mail.should_push == null ? '请先分析邮件' : (mail.should_push ? '推送这封邮件' : 'AI 判定无需推送')"
+                      :aria-label="mail.should_push == null ? '推送待判定' : (mail.should_push ? `推送邮件：${mail.subject}` : '无需推送')">
+                <span class="spinner-border spinner-border-sm" x-show="bulkAction === 'notify' && activeMessageId === mail.id" aria-hidden="true"></span>
+                <i class="bi bi-send" x-show="bulkAction !== 'notify' || activeMessageId !== mail.id" aria-hidden="true"></i>
+                <span>推送</span>
+                <strong x-text="mail.should_push == null ? '…' : (mail.should_push ? '✓' : '✕')"></strong>
+              </button>
+            </fieldset>
           </article>
         </template>
       </div>
@@ -167,14 +218,14 @@
     <nav class="pagination-bar mt-3" aria-label="邮件分页" x-show="total > 0">
       <div class="d-flex align-items-center gap-2">
         <label class="text-secondary small" for="page-size">每页</label>
-        <select class="form-select form-select-sm page-size-select" id="page-size" x-model.number="pageSize" @change="changePageSize">
+        <select class="form-select form-select-sm page-size-select" id="page-size" x-model.number="pageSize" @change="changePageSize" :disabled="loadingMessages || bulkAction !== null">
           <option :value="20">20</option><option :value="50">50</option><option :value="100">100</option>
         </select>
         <span class="text-secondary small">封</span>
       </div>
       <div class="d-flex align-items-center gap-2">
         <span class="text-secondary small me-1" x-text="`第 ${currentPage} / ${pageCount} 页`"></span>
-        <div class="btn-group btn-group-sm" role="group" aria-label="切换页码">
+        <fieldset class="btn-group btn-group-sm" aria-label="切换页码" :disabled="loadingMessages || bulkAction !== null">
           <button class="btn btn-outline-secondary" type="button" title="首页" aria-label="首页" @click="goToPage(1)" :disabled="currentPage === 1"><i class="bi bi-chevron-bar-left" aria-hidden="true"></i></button>
           <button class="btn btn-outline-secondary" type="button" title="上一页" aria-label="上一页" @click="changePage(-1)" :disabled="currentPage === 1"><i class="bi bi-chevron-left" aria-hidden="true"></i></button>
           <template x-for="page in visiblePages" :key="page">
@@ -182,7 +233,7 @@
           </template>
           <button class="btn btn-outline-secondary" type="button" title="下一页" aria-label="下一页" @click="changePage(1)" :disabled="currentPage === pageCount"><i class="bi bi-chevron-right" aria-hidden="true"></i></button>
           <button class="btn btn-outline-secondary" type="button" title="末页" aria-label="末页" @click="goToPage(pageCount)" :disabled="currentPage === pageCount"><i class="bi bi-chevron-bar-right" aria-hidden="true"></i></button>
-        </div>
+        </fieldset>
       </div>
     </nav>
   </section>

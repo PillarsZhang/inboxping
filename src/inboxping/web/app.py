@@ -377,10 +377,12 @@ def create_app(settings: Settings | None = None, *, demo_mode: bool = False) -> 
         if demo_mode:
             raise HTTPException(403, "演示模式不会调用外部服务")
         try:
-            await pipeline.process(message_id, force=True, notify=False)
+            analysis = await pipeline.process(message_id, force=True, notify=False)
         except LookupError as exc:
             raise HTTPException(404, str(exc)) from exc
-        return ActionResponse(status="completed", message_id=message_id)
+        return ActionResponse(
+            status="failed" if analysis.should_push is None else "completed", message_id=message_id
+        )
 
     @app.post("/api/v1/messages/{message_id}/notify", response_model=ActionResponse)
     async def api_notify(request: Request, message_id: int) -> ActionResponse:

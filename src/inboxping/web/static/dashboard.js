@@ -10,6 +10,12 @@ window.dashboardPage = () => ({
   loadingOverview: true,
   loadingMessages: true,
   messageRequestId: 0,
+  selectedIds: [],
+  bulkAction: null,
+  activeMessageId: null,
+  bulkProgress: "",
+  bulkResult: "",
+  bulkErrors: [],
   error: "",
 
   init() {
@@ -25,6 +31,7 @@ window.dashboardPage = () => ({
   },
 
   async refresh() {
+    if (this.bulkAction !== null) return;
     this.error = "";
     await Promise.all([this.loadOverview(), this.loadMessages()]);
   },
@@ -56,6 +63,7 @@ window.dashboardPage = () => ({
         return this.loadMessages();
       }
       this.messages = data.items;
+      this.selectedIds = this.selectedIds.filter(id => data.items.some(mail => mail.id === id));
       this.total = data.total;
     } catch (error) {
       if (requestId === this.messageRequestId) this.error = error.message;
@@ -65,6 +73,8 @@ window.dashboardPage = () => ({
   },
 
   applyFilters() {
+    if (this.bulkAction !== null) return;
+    this.resetSelection();
     this.offset = 0;
     this.syncUrl();
     this.loadMessages();
@@ -87,6 +97,8 @@ window.dashboardPage = () => ({
   },
 
   goToPage(page) {
+    if (this.bulkAction !== null) return;
+    this.resetSelection();
     const target = Math.min(Math.max(page, 1), this.pageCount);
     this.offset = (target - 1) * this.pageSize;
     this.syncUrl();
@@ -94,9 +106,65 @@ window.dashboardPage = () => ({
   },
 
   changePageSize() {
+    if (this.bulkAction !== null) return;
+    this.resetSelection();
     this.offset = 0;
     this.syncUrl();
     this.loadMessages();
+  },
+
+  resetSelection() {
+    this.selectedIds = [];
+    this.bulkResult = "";
+    this.bulkErrors = [];
+  },
+
+  toggleSelection(id, checked) {
+    if (this.bulkAction !== null || this.loadingMessages) return;
+    this.selectedIds = this.selectedIds.filter(selectedId => selectedId !== id);
+    if (checked) this.selectedIds.push(id);
+  },
+
+  toggleAll(checked) {
+    if (this.bulkAction !== null || this.loadingMessages) return;
+    this.selectedIds = checked ? this.messages.map(mail => mail.id) : [];
+  },
+
+  async runBulkAction(action, selected = this.selectedMessages) {
+    if (this.bulkAction !== null || this.loadingMessages) return;
+    const messages = action === "notify"
+      ? selected.filter(mail => mail.should_push === true)
+      : selected;
+    if (!messages.length) return;
+    const label = action === "notify" ? "推送" : "分析";
+    this.bulkAction = action;
+    this.bulkResult = "";
+    this.bulkErrors = [];
+    this.error = "";
+    let succeeded = 0;
+    try {
+      for (const [index, mail] of messages.entries()) {
+        this.activeMessageId = mail.id;
+        this.bulkProgress = `正在${label} ${index + 1}/${messages.length} 封`;
+        try {
+          const result = await InboxPing.apiFetch(`/api/v1/messages/${mail.id}/${action}`, {
+            method: "POST",
+          });
+          if (result.status !== "completed") throw new Error("AI 分析失败，请查看邮件详情或重试");
+          succeeded++;
+        } catch (error) {
+          this.bulkErrors.push({ id: mail.id, subject: mail.subject, message: error.message });
+        }
+      }
+      const skipped = selected.length - messages.length;
+      this.bulkResult = `${label}完成：成功 ${succeeded} 封，失败 ${this.bulkErrors.length} 封${skipped ? `，跳过 ${skipped} 封` : ""}。`;
+      this.bulkProgress = "正在更新列表";
+      await Promise.all([this.loadOverview(), this.loadMessages()]);
+    } finally {
+      this.bulkAction = null;
+      this.activeMessageId = null;
+      this.bulkProgress = "";
+    }
   },
 
   syncUrl() {
@@ -110,6 +178,10 @@ window.dashboardPage = () => ({
   },
 
   formatDate: InboxPing.formatDate,
+  get selectedMessages() { return this.messages.filter(mail => this.selectedIds.includes(mail.id)); },
+  get selectedPushCount() { return this.selectedMessages.filter(mail => mail.should_push === true).length; },
+  get allSelected() { return this.messages.length > 0 && this.selectedMessages.length === this.messages.length; },
+  get partiallySelected() { return this.selectedMessages.length > 0 && !this.allSelected; },
   get currentPage() { return Math.floor(this.offset / this.pageSize) + 1; },
   get pageCount() { return Math.max(1, Math.ceil(this.total / this.pageSize)); },
   get pageStart() { return this.total ? this.offset + 1 : 0; },
