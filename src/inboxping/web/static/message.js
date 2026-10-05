@@ -1,3 +1,15 @@
+const messageMarkdown = new marked.Marked({
+  gfm: true,
+  breaks: true,
+  renderer: {
+    html({ text }) {
+      const element = document.createElement("div");
+      element.textContent = text;
+      return element.innerHTML;
+    },
+  },
+});
+
 window.messagePage = (messageId) => ({
   messageId,
   message: null,
@@ -10,9 +22,17 @@ window.messagePage = (messageId) => ({
   translationDraft: "",
   translationStatus: "",
   translationError: "",
+  notice: "",
   error: "",
 
   init() { this.load(); },
+
+  renderMarkdown(text) {
+    return DOMPurify.sanitize(messageMarkdown.parse(text || ""), {
+      USE_PROFILES: { html: true },
+      FORBID_TAGS: ["img"],
+    });
+  },
 
   async copyRecipients() {
     try {
@@ -41,11 +61,17 @@ window.messagePage = (messageId) => ({
   async runAction(action) {
     this.action = action;
     this.error = "";
+    this.notice = "";
     try {
       await InboxPing.apiFetch(`/api/v1/messages/${this.messageId}/${action}`, {
         method: "POST",
       });
       await this.load(false);
+      if (action === "refresh-body" && !this.error) {
+        this.notice = this.message.translation
+          ? "正文已更新，已有译文保留。可点击“重新翻译”更新译文。"
+          : "正文已重新读取并更新。";
+      }
     } catch (error) {
       this.error = error.message;
     } finally {
@@ -77,6 +103,7 @@ window.messagePage = (messageId) => ({
           this.translationStatus = "翻译完成";
           this.message.translation = event.translation;
           this.translationDraft = "";
+          this.notice = "";
         }
       }
       if (!completed) throw new Error("翻译连接意外中断");
@@ -109,6 +136,7 @@ window.messagePage = (messageId) => ({
     this.translationDraft = "";
     this.translationStatus = "";
     this.translationError = "";
+    this.notice = "";
   },
 
   formatDate: InboxPing.formatDate,

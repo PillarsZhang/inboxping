@@ -1,4 +1,6 @@
-from inboxping.mail.parser import parse_message
+from email.message import EmailMessage
+
+from inboxping.mail.parser import html_to_markdown, parse_message
 
 
 def test_parse_plain_message_without_marking_side_effects() -> None:
@@ -40,7 +42,7 @@ YWJj
 --x--
 """
     result = parse_message(raw)
-    assert "Hello" in result.text_body
+    assert result.text_body == "Hello **world**"
     assert "alert" not in result.text_body
     assert result.attachments[0]["filename"] == "notice.pdf"
     assert result.attachments[0]["size"] == 3
@@ -58,3 +60,92 @@ hello
 """
     result = parse_message(raw)
     assert result.authentication == {"spf": "pass", "dkim": "pass", "dmarc": "pass"}
+
+
+def test_html_email_keeps_inline_text_in_paragraphs() -> None:
+    mail = EmailMessage()
+    mail.set_content(
+        """
+        <table><tr><td>
+            <p>Hello <strong>Example User</strong>,</p>
+            <p>Your profile update was approved and the changes will appear in
+                Example <i>Portal</i> within one week.
+                Click <a href="https://example.org/request">View Request</a> for details.</p>
+            <p><strong>Request ID:</strong> 123456</p>
+            <p><a href="https://example.org/help">Contact Us</a> for help.</p>
+            <p>&copy; Copyright <span>2026</span> Example Organization.</p>
+        </td></tr></table>
+    """,
+        subtype="html",
+    )
+    result = parse_message(mail.as_bytes())
+    assert result.text_body == (
+        "Hello **Example User**,\n\n"
+        "Your profile update was approved and the changes will appear in "
+        "Example *Portal* within one week. "
+        "Click [View Request](https://example.org/request) for details.\n\n"
+        "**Request ID:** 123456\n\n"
+        "[Contact Us](https://example.org/help) for help.\n\n"
+        "© Copyright 2026 Example Organization."
+    )
+
+
+def test_html_preserves_explicit_breaks_lists_and_table_rows() -> None:
+    text = html_to_markdown("""
+        <div>Meeting details<br>Monday at 10:00</div>
+        <ul><li>Bring <b>notes</b></li><li>Confirm attendance</li></ul>
+        <table>
+            <tr><th>Time</th><th>Room</th></tr>
+            <tr><td>10:00</td><td>A1</td></tr>
+        </table>
+    """)
+    assert text == (
+        "Meeting details  \nMonday at 10:00\n\n"
+        "* Bring **notes**\n* Confirm attendance\n\n"
+        "| Time | Room |\n| --- | --- |\n| 10:00 | A1 |"
+    )
+
+
+def test_html_preserves_preformatted_text_and_chinese_inline_punctuation() -> None:
+    text = html_to_markdown(
+        "<p>请<b>确认</b>，并查看<a href='https://example.org'>详情</a>。</p>"
+        "<pre>    line one\n    indented\n\n\nline four</pre><p>结束。</p>"
+    )
+    assert text == (
+        "请**确认**，并查看[详情](https://example.org)。\n\n"
+        "```\n    line one\n    indented\n\n\nline four\n```\n\n结束。"
+    )
+
+
+def test_layout_tables_preserve_nested_data_tables_and_text_only_rows() -> None:
+    text = html_to_markdown(
+        "<table role='presentation'><tr><td>Details:</td></tr><tr><td>"
+        "<table><tr><th>Time</th><th>Room</th></tr>"
+        "<tr><td>10:00</td><td>A1</td></tr></table>"
+        "</td></tr><tr><td>End.</td></tr></table>"
+    )
+    assert text == "Details:\n\n| Time | Room |\n| --- | --- |\n| 10:00 | A1 |\n\nEnd."
+    headerless = html_to_markdown(
+        "<table><tr><td>One</td><td>Two</td></tr><tr><td>1</td><td>2</td></tr></table>"
+    )
+    assert "| One | Two |" in headerless
+    assert "| 1 | 2 |" in headerless
+
+
+def test_html_conversion_removes_scripts_styles_and_remote_images() -> None:
+    text = html_to_markdown(
+        "<head><title>Hidden title</title></head>"
+        "<style>Hidden style</style><script>Hidden script</script>"
+        "<noscript>Hidden fallback</noscript>"
+        "<img src='https://example.org/track' alt='Hidden tracking image'>"
+        "<p>Visible <a href='https://example.org/?a=1&amp;b=2'>link</a>.</p>"
+    )
+    assert text == "Visible [link](https://example.org/?a=1&b=2)."
+
+
+def test_multipart_prefers_plain_text_and_keeps_its_line_breaks() -> None:
+    mail = EmailMessage()
+    plain = "Hello Example User,\n\nPlease confirm:\n  first item\n  second item\n"
+    mail.set_content(plain)
+    mail.add_alternative("<p>Different HTML content</p>", subtype="html")
+    assert parse_message(mail.as_bytes()).text_body == plain.strip()

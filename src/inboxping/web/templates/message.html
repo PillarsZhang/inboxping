@@ -70,7 +70,7 @@
         </div>
 
         <div class="col-12 col-xl-7">
-          <section class="card analysis-card h-100" x-show="message.analysis">
+          <section class="card analysis-card h-100">
             <div class="card-body">
               <div class="analysis-header mb-3">
                 <h2 class="h5 mb-0">AI 分析</h2>
@@ -80,8 +80,9 @@
                   <span class="score-badge score-decision" :class="message.should_push == null ? 'score-undecided' : (message.should_push ? 'score-push' : 'score-no-push')" :aria-label="message.should_push == null ? '推送待判定' : (message.should_push ? '需要推送' : '不需要推送')"><i class="bi bi-send" aria-hidden="true"></i><span>推送</span><strong x-text="message.should_push == null ? '…' : (message.should_push ? '✓' : '✕')"></strong></span>
                 </div>
               </div>
-              <p class="analysis-summary" x-text="message.analysis?.summary"></p>
-              <div class="analysis-meta">
+              <p class="text-secondary mb-0" x-show="!message.analysis">尚未分析，可点击下方按钮开始分析。</p>
+              <p class="analysis-summary" x-show="message.analysis" x-text="message.analysis?.summary"></p>
+              <div class="analysis-meta" x-show="message.analysis">
                 <span><small>分类</small><strong x-text="InboxPing.categoryLabel(message.analysis?.category)"></strong></span>
                 <span><small>模型</small><strong x-text="message.analysis?.model"></strong></span>
                 <span><small>Token 用量</small><strong x-text="message.analysis?.prompt_tokens != null && message.analysis?.completion_tokens != null ? `输入 ${message.analysis.prompt_tokens.toLocaleString()} · 输出 ${message.analysis.completion_tokens.toLocaleString()}` : '服务未提供'"></strong></span>
@@ -90,8 +91,8 @@
               <p class="small mt-3 mb-0" x-show="message.analysis?.risk_reason"><strong>风险说明：</strong><span x-text="message.analysis?.risk_reason"></span></p>
               <p class="small mt-2 mb-0" x-show="message.analysis?.action_required && message.analysis?.action_text"><strong>建议操作：</strong><span x-text="message.analysis?.action_text"></span><span x-show="message.analysis?.deadline" x-text="`（${message.analysis?.deadline}）`"></span></p>
               <div class="d-flex flex-wrap gap-2 mt-4">
-                <button class="btn btn-primary btn-sm" type="button" @click="runAction('reanalyze')" :disabled="action !== null"><span class="spinner-border spinner-border-sm me-1" x-show="action === 'reanalyze'"></span><i class="bi bi-stars me-1" x-show="action !== 'reanalyze'"></i>重新分析</button>
-                <button class="btn btn-outline-secondary btn-sm" type="button" @click="runAction('notify')" :disabled="action !== null || !message.should_push"><span class="spinner-border spinner-border-sm me-1" x-show="action === 'notify'"></span><i class="bi bi-send me-1" x-show="action !== 'notify'"></i>重新推送</button>
+                <button class="btn btn-primary btn-sm" type="button" @click="runAction('reanalyze')" :disabled="action !== null"><span class="spinner-border spinner-border-sm me-1" x-show="action === 'reanalyze'"></span><i class="bi bi-stars me-1" x-show="action !== 'reanalyze'"></i><span x-text="action === 'reanalyze' ? '分析中…' : (message.analysis ? '重新分析' : '分析邮件')"></span></button>
+                <button class="btn btn-outline-secondary btn-sm" type="button" x-show="message.analysis" @click="runAction('notify')" :disabled="action !== null || !message.should_push"><span class="spinner-border spinner-border-sm me-1" x-show="action === 'notify'"></span><i class="bi bi-send me-1" x-show="action !== 'notify'"></i>重新推送</button>
               </div>
             </div>
           </section>
@@ -102,13 +103,15 @@
         <div class="d-flex align-items-center justify-content-between gap-3 mb-3">
           <h2 class="h4 mb-0">正文</h2>
           <div class="d-flex flex-wrap justify-content-end gap-2">
+            <button class="btn btn-outline-primary btn-sm" type="button" @click="runAction('refresh-body')" :disabled="action !== null || translating" title="从原邮箱只读读取，并更新本地正文"><span class="spinner-border spinner-border-sm me-1" x-show="action === 'refresh-body'"></span><i class="bi bi-arrow-repeat me-1" x-show="action !== 'refresh-body'" aria-hidden="true"></i><span x-text="action === 'refresh-body' ? '读取中…' : '重新读取正文'"></span></button>
             <a class="btn btn-outline-secondary btn-sm" :href="`/api/v1/messages/${message.id}/export/original.md`"><i class="bi bi-filetype-md me-1" aria-hidden="true"></i>下载原文</a>
             <a class="btn btn-outline-secondary btn-sm" :href="`/api/v1/messages/${message.id}/export/eml`" title="从原邮箱只读获取，不在本地保存"><i class="bi bi-envelope-arrow-down me-1" aria-hidden="true"></i>下载 EML</a>
           </div>
         </div>
-        <article class="card"><pre class="message-body card-body mb-0" x-text="message.text_body || '没有可显示的正文。'"></pre></article>
+        <div class="alert alert-info" role="status" x-show="notice" x-text="notice"></div>
+        <article class="card"><div class="message-body card-body" x-html="renderMarkdown(message.text_body || '没有可显示的正文。')"></div></article>
         <div class="d-flex justify-content-end mt-3" x-show="!message.translation">
-          <button class="btn btn-primary" type="button" @click="runTranslation()" :disabled="translating"><span class="spinner-border spinner-border-sm me-1" x-show="translating"></span><i class="bi bi-translate me-1" x-show="!translating"></i><span x-text="translating ? '正在翻译' : '翻译全文'"></span></button>
+          <button class="btn btn-primary" type="button" @click="runTranslation()" :disabled="translating || action !== null"><span class="spinner-border spinner-border-sm me-1" x-show="translating"></span><i class="bi bi-translate me-1" x-show="!translating"></i><span x-text="translating ? '正在翻译' : '翻译全文'"></span></button>
         </div>
       </section>
 
@@ -120,15 +123,19 @@
           </div>
           <div class="d-flex flex-wrap align-items-center gap-2">
             <a class="btn btn-outline-secondary btn-sm" x-show="message.translation && !translating" :href="`/api/v1/messages/${message.id}/export/translation.md`"><i class="bi bi-filetype-md me-1" aria-hidden="true"></i>下载翻译</a>
-            <button class="btn btn-outline-primary btn-sm" type="button" x-show="message.translation" @click="runTranslation()" :disabled="translating"><span class="spinner-border spinner-border-sm me-1" x-show="translating"></span><i class="bi bi-arrow-repeat me-1" x-show="!translating"></i>重新翻译</button>
-            <button class="btn btn-outline-danger btn-sm" type="button" @click="deleteTranslation()" :disabled="translating"><i class="bi bi-trash me-1" aria-hidden="true"></i>删除翻译</button>
+            <button class="btn btn-outline-primary btn-sm" type="button" x-show="message.translation" @click="runTranslation()" :disabled="translating || action !== null"><span class="spinner-border spinner-border-sm me-1" x-show="translating"></span><i class="bi bi-arrow-repeat me-1" x-show="!translating"></i>重新翻译</button>
+            <button class="btn btn-outline-danger btn-sm" type="button" @click="deleteTranslation()" :disabled="translating || action !== null"><i class="bi bi-trash me-1" aria-hidden="true"></i>删除翻译</button>
           </div>
         </div>
         <div class="alert alert-danger" role="alert" x-show="translationError" x-text="translationError"></div>
-        <article class="card" aria-live="polite"><pre class="message-body card-body mb-0" x-text="translationDraft || message.translation?.text || ''"></pre></article>
+        <article class="card" aria-live="polite"><div class="message-body card-body" x-html="renderMarkdown(translationDraft || message.translation?.text || '')"></div></article>
       </section>
     </div>
   </template>
 </div>
 {% endblock %}
-{% block scripts %}<script src="/static/message.js?v={{ asset_version }}"></script>{% endblock %}
+{% block scripts %}
+<script src="/static/vendor/marked/marked.umd.js?v=18.0.14"></script>
+<script src="/static/vendor/dompurify/purify.min.js?v=3.4.16"></script>
+<script src="/static/message.js?v={{ asset_version }}"></script>
+{% endblock %}

@@ -42,5 +42,6 @@ def test_demo_is_seeded_and_blocks_external_actions(tmp_path) -> None:
         assert decisions == {"academic": True, "malware": False, "advertising": False}
         assert all("example" in message["sender_address"] for message in messages)
         assert client.post(f"/api/v1/messages/{messages[0]['id']}/reanalyze").status_code == 403
+        assert client.post(f"/api/v1/messages/{messages[0]['id']}/refresh-body").status_code == 403
         assert client.post(f"/api/v1/messages/{messages[0]['id']}/notify").status_code == 403
         assert client.post(f"/api/v1/messages/{messages[0]['id']}/translate").status_code == 403

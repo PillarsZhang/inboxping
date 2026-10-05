@@ -6,6 +6,7 @@ from loguru import logger
 
 from inboxping.config import Settings
 from inboxping.db import Database
+from inboxping.mail.parser import parse_message
 from inboxping.mail.receivers import create_receiver
 from inboxping.models import AccountState, Event, Message
 
@@ -61,3 +62,37 @@ def fetch_message_eml(settings: Settings, db: Database, message_id: int) -> Fetc
         "已从原邮箱读取 EML（大小={} 字节）", len(raw_eml)
     )
     return FetchedEml(content=raw_eml, subject=subject)
+
+
+def refresh_message_body(settings: Settings, db: Database, message_id: int) -> None:
+    """Rebuild the cached body while preserving analysis, translations and deliveries."""
+    with db.session() as session:
+        message = session.get(Message, message_id)
+        if message is None:
+            raise LookupError("邮件不存在")
+        log = logger.bind(account=message.account_id, message_id=message_id, uid=message.uid)
+
+    try:
+        fetched = fetch_message_eml(settings, db, message_id)
+        parsed = parse_message(fetched.content, settings.analysis.body_max_chars)
+        if not parsed.text_body.strip():
+            raise RuntimeError("原邮件没有可读取的正文，本地正文未更新")
+        with db.session() as session:
+            message = session.get(Message, message_id)
+            if message is None:
+                raise LookupError("邮件不存在")
+            if message.message_id and parsed.message_id and message.message_id != parsed.message_id:
+                raise RuntimeError("原邮件标识不一致，本地正文未更新")
+            message.text_body = parsed.text_body
+            session.add(
+                Event(
+                    level="info",
+                    kind="body_refreshed",
+                    account_id=message.account_id,
+                    message=f"已重新转换邮件正文，本地ID={message.id}，UID={message.uid}",
+                )
+            )
+    except Exception:
+        log.exception("重新读取邮件正文失败，本地正文保留")
+        raise
+    log.info("已重新读取并转换邮件正文（字符={}）", len(parsed.text_body))

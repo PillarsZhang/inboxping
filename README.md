@@ -141,7 +141,7 @@ uv run inboxping serve --reload
 ```
 
 打开 <http://127.0.0.1:8000>。监听地址和端口来自 `config.yaml` 的 `web.host` 与 `web.port`。
-首页和邮件详情使用 Bootstrap、Bootstrap Icons 与 Alpine.js，通过同源 JSON API 动态加载；筛选、分页、刷新、重新分析和重新推送均无需整页刷新。前端依赖固定版本并随应用本地提供，不依赖公网 CDN，也不需要 Node 构建环境。API 文档位于 <http://127.0.0.1:8000/docs>，主要端点如下：
+首页和邮件详情使用 Bootstrap、Bootstrap Icons 与 Alpine.js，通过同源 JSON API 动态加载；筛选、分页、刷新、分析和推送均无需整页刷新。正文和译文通过 Marked 和 DOMPurify 渲染 Markdown，原始 HTML 按文字显示，不自动加载邮件图片。前端依赖固定版本并随应用本地提供，不依赖公网 CDN，也不需要 Node 构建环境。
 
 仓库中的前端静态依赖可以通过辅助脚本校验，或按固定版本重新下载。脚本会校验 SHA-256，只有所有文件通过后才替换现有资源：
 
@@ -149,9 +149,11 @@ uv run inboxping serve --reload
 # 只校验当前文件，不联网
 uv run python scripts/vendor_web_assets.py --check
 
-# 重新下载 Bootstrap、Bootstrap Icons、Alpine.js 及其许可证
+# 按固定版本重新下载全部前端依赖及许可证
 uv run python scripts/vendor_web_assets.py
 ```
+
+API 文档位于 <http://127.0.0.1:8000/docs>，主要端点如下：
 
 ```text
 GET  /api/v1/overview
@@ -163,6 +165,7 @@ GET  /api/v1/messages/{id}/export/original.md
 GET  /api/v1/messages/{id}/export/translation.md
 GET  /api/v1/events
 POST /api/v1/messages/{id}/reanalyze
+POST /api/v1/messages/{id}/refresh-body
 POST /api/v1/messages/{id}/notify
 POST /api/v1/messages/{id}/translate
 DELETE /api/v1/messages/{id}/translation
@@ -172,7 +175,9 @@ API 与 Web 使用同一登录会话。响应中的 `should_push` 是 AI 的推�
 
 ### 全文翻译与导出
 
-邮件详情页可按需调用当前 AI 模型，将已保存的纯文本正文翻译为简体中文。译文通过 NDJSON 流在正文下方实时展开，完成时不会重载页面或改变滚动位置。只有完整译文会写入数据库；请求失败、超时或浏览器中断都不会保存残缺内容。重新翻译失败时保留上一份完整译文；“删除翻译”只删除本地译文缓存，不修改原邮件。
+邮件详情页可按需调用当前 AI 模型，将已保存的正文翻译为简体中文并保留 Markdown 格式。正文和译文均支持段落、列表、链接、代码块和表格。译文通过 NDJSON 流在正文下方实时展开，完成时不会重载页面或改变滚动位置。只有完整译文会写入数据库；请求失败、超时或浏览器中断都不会保存残缺内容。重新翻译失败时保留上一份完整译文；“删除翻译”只删除本地译文缓存，不修改原邮件。
+
+旧邮件可点击正文旁的“重新读取正文”，从原邮箱只读获取邮件，并按当前规则更新本地正文；读取或转换失败时保留原正文。已有分析、译文和推送记录都会保留；需要更新译文时再点击“重新翻译”。
 
 `ai.max_output_chars` 限制单次 AI 流式输出的累计字符数，默认为 100,000。超限请求会立即中止，分析标记失败且不自动推送，翻译则在页面显示错误且不保存未完成内容。
 
@@ -183,7 +188,7 @@ uv run inboxping translate-message 12
 uv run inboxping translate-message 12 --force
 ```
 
-原文和译文可分别下载为 Markdown，文件使用扁平的 YAML Front Matter 保存主题、发件人、收件人、邮件时间和 Message-ID。Markdown 由后端生成并直接下载，前端不引入额外渲染库。EML 不在本地持久化；用户点击下载时，系统才会按原账户与邮件标识从原邮箱只读获取。如果邮件已被移动或删除，或 IMAP UIDVALIDITY 已变化，就无法再可靠拉取。
+原文和译文可分别下载为 Markdown，文件使用扁平的 YAML Front Matter 保存主题、发件人、收件人、邮件时间和 Message-ID，并保留正文中的 Markdown 格式。EML 不在本地持久化；用户点击下载时，系统才会按原账户与邮件标识从原邮箱只读获取。如果邮件已被移动或删除，或 IMAP UIDVALIDITY 已变化，就无法再可靠拉取。
 
 临时开启最详细日志并同时保存到项目内：
 
@@ -253,6 +258,6 @@ uv run inboxping clear-data
 uv run inboxping clear-data --yes
 ```
 
-邮件正文、元数据、分析、翻译及通知记录都会永久保留，只有主动执行 `clear-data` 才会清空。HTML 邮件会转换出用于阅读和分析的纯文本；完整原始 EML 不在本地保存。
+邮件正文、元数据、分析、翻译及通知记录都会永久保留，只有主动执行 `clear-data` 才会清空。HTML 正文使用 `markdownify` 转为 Markdown，展开常见排版表格，保留段落、强调、链接、列表及数据表格；纯文本正文保留原有换行。完整原始 EML 不在本地保存；升级转换规则不会自动更新已保存的正文或译文。
 
 完整需求与运维说明见 `docs/requirements.md` 和 `docs/operations.md`。

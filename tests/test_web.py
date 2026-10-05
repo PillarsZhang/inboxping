@@ -1,11 +1,14 @@
 import json
 from datetime import UTC, datetime
+from email.message import EmailMessage
 from pathlib import Path
 
 import yaml
 from fastapi.testclient import TestClient
 from pwdlib import PasswordHash
 
+from inboxping.ai.client import AnalyzedMessage, TokenUsage
+from inboxping.ai.schema import AnalysisResult
 from inboxping.config import Settings
 from inboxping.mail.source_fetch import FetchedEml
 from inboxping.models import Analysis, Message, Notification
@@ -195,6 +198,12 @@ def test_web_shows_push_title_channel_and_delivery_status(tmp_path) -> None:
         assert 'class="analysis-badges"' in detail.text
         assert 'class="analysis-meta"' in detail.text
         assert "/static/message.js?v=" in detail.text
+        assert "/static/vendor/marked/marked.umd.js?v=18.0.14" in detail.text
+        assert "/static/vendor/dompurify/purify.min.js?v=3.4.16" in detail.text
+        assert 'x-html="renderMarkdown(message.text_body' in detail.text
+        assert 'x-html="renderMarkdown(translationDraft' in detail.text
+        assert client.get("/static/vendor/marked/marked.umd.js").status_code == 200
+        assert client.get("/static/vendor/dompurify/purify.min.js").status_code == 200
         assert f'x-data="messagePage({message_id})"' in detail.text
         assert "返回首页" in detail.text
         assert "下载 EML" in detail.text
@@ -204,7 +213,7 @@ def test_web_shows_push_title_channel_and_delivery_status(tmp_path) -> None:
         assert 'x-for="(address, index) in recipientList"' in detail.text
         assert "复制全部地址" in detail.text
         assert '@click="runTranslation()"' in detail.text
-        assert ':disabled="translating"' in detail.text
+        assert ':disabled="translating || action !== null"' in detail.text
         assert ':disabled="action !== null"' in detail.text
         assert ':disabled="action"' not in detail.text
         assert "←" not in detail.text
@@ -224,6 +233,73 @@ def test_web_shows_push_title_channel_and_delivery_status(tmp_path) -> None:
         }
 
 
+def test_message_without_analysis_can_be_manually_analyzed(tmp_path, monkeypatch) -> None:
+    settings = Settings(
+        storage={"database_url": f"sqlite:///{tmp_path / 'test.db'}"},
+        web={"session_secret": "test-secret", "password_hash": ""},
+        ai={"enabled": True, "base_url": "https://api.example.com/v1"},
+        mail={"accounts": []},
+    )
+    with TestClient(create_app(settings)) as client:
+        with client.app.state.db.session() as session:
+            message = Message(
+                account_id="demo",
+                uid_validity=1,
+                uid=1,
+                subject="Meeting update",
+                sender_address="sender@example.com",
+                text_body="The meeting starts at 10:00.",
+                status="stored",
+            )
+            session.add(message)
+            session.flush()
+            message_id = message.id
+
+        analysis_calls = []
+        notification_calls = []
+
+        async def analyze(message, prompt):
+            analysis_calls.append(message.text_body)
+            return AnalyzedMessage(
+                result=AnalysisResult(
+                    title_zh="会议时间更新",
+                    summary_zh="会议于 10:00 开始。",
+                    category="administrative",
+                    importance_score=0.7,
+                    risk={"score": 0.1},
+                    should_push=True,
+                    push_reason="会议安排需要查看",
+                ),
+                usage=TokenUsage(prompt_tokens=100, completion_tokens=50),
+            )
+
+        async def send_notification(*args, **kwargs):
+            notification_calls.append((args, kwargs))
+
+        monkeypatch.setattr(client.app.state.pipeline.ai, "analyze", analyze)
+        monkeypatch.setattr(client.app.state.pipeline, "send_notification", send_notification)
+
+        before = client.get(f"/api/v1/messages/{message_id}").json()
+        assert before["status"] == "stored"
+        assert before["analysis"] is None
+        assert before["should_push"] is None
+
+        for _ in range(2):
+            response = client.post(f"/api/v1/messages/{message_id}/reanalyze")
+            assert response.status_code == 200
+            detail = client.get(f"/api/v1/messages/{message_id}").json()
+            assert detail["status"] == "analyzed"
+            assert detail["analysis"]["title"] == "会议时间更新"
+            assert detail["analysis"]["prompt_tokens"] == 100
+            assert detail["should_push"] is True
+            assert detail["text_body"] == before["text_body"]
+            assert detail["notifications"] == []
+
+        assert analysis_calls == [before["text_body"], before["text_body"]]
+        assert notification_calls == []
+        assert client.post("/api/v1/messages/99999/reanalyze").status_code == 404
+
+
 def test_message_translation_is_cached_and_can_be_refreshed(tmp_path, monkeypatch) -> None:
     settings = Settings(
         storage={"database_url": f"sqlite:///{tmp_path / 'test.db'}"},
@@ -239,7 +315,11 @@ def test_message_translation_is_cached_and_can_be_refreshed(tmp_path, monkeypatc
                 uid=7,
                 subject="Meeting update",
                 sender_address="sender@example.com",
-                text_body="The meeting starts at 10:00. <script>alert(1)</script>",
+                text_body=(
+                    "The meeting starts at **10:00**.\n\n"
+                    "[Details](https://example.org/?a=1&b=2) <script>alert(1)</script>\n\n"
+                    "```\n<example>&text</example>\n```"
+                ),
                 received_at=datetime.now(UTC),
                 status="completed",
             )
@@ -252,9 +332,8 @@ def test_message_translation_is_cached_and_can_be_refreshed(tmp_path, monkeypatc
         async def stream_translation(message, prompt, *, on_usage=None):
             nonlocal translate_calls
             translate_calls += 1
+            assert "**10:00**" in prompt.render(message)
             if on_usage:
-                from inboxping.ai.client import TokenUsage
-
                 on_usage(TokenUsage(prompt_tokens=20, completion_tokens=8))
             yield "会议于"
             yield "上午十点开始。"
@@ -284,7 +363,10 @@ def test_message_translation_is_cached_and_can_be_refreshed(tmp_path, monkeypatc
 
         original_export = client.get(f"/api/v1/messages/{message_id}/export/original.md")
         assert original_export.status_code == 200
-        assert "&lt;script&gt;alert(1)&lt;/script&gt;" in original_export.text
+        assert "**10:00**" in original_export.text
+        assert "[Details](https://example.org/?a=1&b=2)" in original_export.text
+        assert "<script>alert(1)</script>" in original_export.text
+        assert "```\n<example>&text</example>\n```" in original_export.text
         assert "attachment;" in original_export.headers["content-disposition"]
         original_metadata = yaml.safe_load(original_export.text.split("---", 2)[1])
         assert original_metadata["content_type"] == "original"
@@ -309,6 +391,43 @@ def test_message_translation_is_cached_and_can_be_refreshed(tmp_path, monkeypatc
         )
         eml_export = client.get(f"/api/v1/messages/{message_id}/export/eml")
         assert eml_export.content == b"Subject: Test\r\n\r\nBody"
+
+        refreshed_mail = EmailMessage()
+        refreshed_mail.set_content(
+            "<p>The meeting starts at <strong>10:00</strong>. Updated schedule.</p>",
+            subtype="html",
+        )
+        monkeypatch.setattr(
+            "inboxping.mail.source_fetch.fetch_message_eml",
+            lambda *args: FetchedEml(content=refreshed_mail.as_bytes(), subject="Meeting update"),
+        )
+        refreshed = client.post(f"/api/v1/messages/{message_id}/refresh-body")
+        assert refreshed.status_code == 200
+        assert refreshed.json() == {"status": "completed", "message_id": message_id}
+        detail = client.get(f"/api/v1/messages/{message_id}").json()
+        assert detail["text_body"] == "The meeting starts at **10:00**. Updated schedule."
+        assert detail["status"] == "completed"
+        assert detail["translation"]["text"] == "会议于上午十点开始。"
+        assert detail["notifications"] == []
+
+        def missing_original(*args):
+            raise RuntimeError("原邮件已被删除")
+
+        monkeypatch.setattr("inboxping.mail.source_fetch.fetch_message_eml", missing_original)
+        failed_refresh = client.post(f"/api/v1/messages/{message_id}/refresh-body")
+        assert failed_refresh.status_code == 409
+        assert failed_refresh.json()["detail"] == "原邮件已被删除"
+        assert client.get(f"/api/v1/messages/{message_id}").json() == detail
+
+        def disconnected_mailbox(*args):
+            raise TimeoutError("private connection details")
+
+        monkeypatch.setattr("inboxping.mail.source_fetch.fetch_message_eml", disconnected_mailbox)
+        failed_refresh = client.post(f"/api/v1/messages/{message_id}/refresh-body")
+        assert failed_refresh.status_code == 502
+        assert "private connection details" not in failed_refresh.text
+        assert client.get(f"/api/v1/messages/{message_id}").json() == detail
+        assert client.post("/api/v1/messages/99999/refresh-body").status_code == 404
 
         assert client.post(f"/api/v1/messages/{message_id}/translate").status_code == 200
         assert translate_calls == 1
@@ -465,6 +584,7 @@ def test_login_is_long_lived_and_preserves_username_after_failure(tmp_path) -> N
     )
     with TestClient(create_app(settings)) as client:
         failed = client.post("/login", data={"username": "admin", "password": "wrong-password"})
+        assert client.post("/api/v1/messages/1/refresh-body").status_code == 401
         assert failed.status_code == 401
         assert 'value="admin"' in failed.text
 

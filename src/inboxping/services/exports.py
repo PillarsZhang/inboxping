@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import html
 import re
 from datetime import UTC, datetime, timedelta, timezone
 from urllib.parse import quote
@@ -74,8 +73,8 @@ def _render_markdown(
         sort_keys=False,
         default_flow_style=False,
     ).strip()
-    safe_body = html.escape(body or "没有可显示的正文。", quote=False)
-    return f"---\n{front_matter}\n---\n\n# {_escape_inline(heading)}\n\n{safe_body}\n"
+    markdown_body = body or "没有可显示的正文。"
+    return f"---\n{front_matter}\n---\n\n# {_escape_inline(heading)}\n\n{markdown_body}\n"
 
 
 def _escape_inline(value: str) -> str:

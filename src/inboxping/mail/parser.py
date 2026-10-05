@@ -11,6 +11,7 @@ from email.parser import BytesParser
 from email.utils import getaddresses, parsedate_to_datetime
 
 from bs4 import BeautifulSoup
+from markdownify import MarkdownConverter
 
 
 @dataclass
@@ -53,11 +54,35 @@ def _payload_text(part: EmailMessage) -> str:
         return payload.decode(part.get_content_charset() or "utf-8", errors="replace")
 
 
-def html_to_text(html: str) -> str:
+def html_to_markdown(html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
-    for node in soup(["script", "style", "head", "noscript"]):
+    for node in soup(["script", "style", "head", "noscript", "img"]):
         node.decompose()
-    return re.sub(r"\n{3,}", "\n\n", soup.get_text("\n", strip=True)).strip()
+
+    # Email layout tables must not turn the entire message into one Markdown cell.
+    layout_tables = []
+    for table in soup.find_all("table"):
+        rows = [row for row in table.find_all("tr") if row.find_parent("table") is table]
+        has_header = any(
+            node.find_parent("table") is table for node in table.find_all(["th", "thead"])
+        )
+        if table.get("role") in {"presentation", "none"} or (
+            not has_header
+            and (
+                table.find("table") is not None
+                or all(len(row.find_all(["td", "th"], recursive=False)) <= 1 for row in rows)
+            )
+        ):
+            layout_tables.append(table)
+    for table in reversed(layout_tables):
+        for node in table.find_all(["thead", "tbody", "tfoot", "tr", "td", "th"]):
+            if node.find_parent("table") is table:
+                node.name = "div"
+        table.name = "div"
+
+    return MarkdownConverter(
+        heading_style="ATX", wrap=True, wrap_width=None, strip_pre=None
+    ).convert_soup(soup)
 
 
 def parse_message(raw: bytes, max_chars: int = 20_000) -> ParsedMail:
@@ -93,7 +118,7 @@ def parse_message(raw: bytes, max_chars: int = 20_000) -> ParsedMail:
             html_parts.append(content)
 
     html_body = "\n".join(html_parts)
-    text_body = "\n".join(text_parts).strip() or html_to_text(html_body)
+    text_body = "\n".join(text_parts).strip() or html_to_markdown(html_body)
     text_body = text_body[:max_chars]
     authentication_headers = " ".join(mail.get_all("Authentication-Results", []))
     authentication: dict[str, str] = {}

@@ -20,7 +20,7 @@ from inboxping.config import Settings, get_settings
 from inboxping.db import Database
 from inboxping.logging import configure_logging
 from inboxping.mail.monitor import MailMonitor
-from inboxping.mail.source_fetch import fetch_message_eml
+from inboxping.mail.source_fetch import fetch_message_eml, refresh_message_body
 from inboxping.models import AccountState, Analysis, Event, Message
 from inboxping.services.exports import (
     attachment_header,
@@ -355,6 +355,21 @@ def create_app(settings: Settings | None = None, *, demo_mode: bool = False) -> 
                 media_type="text/markdown; charset=utf-8",
                 headers={"Content-Disposition": attachment_header(filename)},
             )
+
+    @app.post("/api/v1/messages/{message_id}/refresh-body", response_model=ActionResponse)
+    async def api_refresh_body(request: Request, message_id: int) -> ActionResponse:
+        require_auth(request)
+        if demo_mode:
+            raise HTTPException(403, "演示模式不会连接外部邮箱")
+        try:
+            await asyncio.to_thread(refresh_message_body, settings, db, message_id)
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(502, "重新读取正文失败，请检查邮箱连接或查看日志") from exc
+        return ActionResponse(status="completed", message_id=message_id)
 
     @app.post("/api/v1/messages/{message_id}/reanalyze", response_model=ActionResponse)
     async def api_reanalyze(request: Request, message_id: int) -> ActionResponse:

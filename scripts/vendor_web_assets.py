@@ -63,6 +63,26 @@ ASSETS = (
         "https://raw.githubusercontent.com/alpinejs/alpine/v3.15.12/LICENSE.md",
         "08b7502da6e7aa1d0bbdc97d220fbf669b9366c61bd0f072238283c89bc4773a",
     ),
+    Asset(
+        "marked/marked.umd.js",
+        "https://cdn.jsdelivr.net/npm/marked@18.0.14/lib/marked.umd.js",
+        "21568877a938d2c4e7d74e27f18e60da96bb73a68809610ca39216e1efebae62",
+    ),
+    Asset(
+        "marked/LICENSE",
+        "https://cdn.jsdelivr.net/npm/marked@18.0.14/LICENSE",
+        "8e3a3f82f59a60958f56ca08f445647c32a4733dc7ca6c2c46f6eb898471ab9c",
+    ),
+    Asset(
+        "dompurify/purify.min.js",
+        "https://cdn.jsdelivr.net/npm/dompurify@3.4.16/dist/purify.min.js",
+        "2c90a9b46d6463f26038a29b686e82bc91de01fdac9d5229e7cfe3b360134ea2",
+    ),
+    Asset(
+        "dompurify/LICENSE",
+        "https://cdn.jsdelivr.net/npm/dompurify@3.4.16/LICENSE",
+        "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    ),
 )
 
 

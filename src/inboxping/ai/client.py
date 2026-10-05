@@ -54,7 +54,7 @@ class AIClient:
     def trust_context(self, message: Message) -> str:
         sender = message.sender_address.strip().lower()
         sender_domain = sender.rsplit("@", 1)[-1] if "@" in sender else ""
-        links = re.findall(r"https?://[^\s<>\"']+", message.text_body, re.IGNORECASE)
+        links = re.findall(r"https?://[^\s<>\"'\[\]()]+", message.text_body, re.IGNORECASE)
         link_hosts: set[str] = set()
         for link in links:
             try:

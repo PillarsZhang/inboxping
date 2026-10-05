@@ -48,6 +48,9 @@ def test_trust_context_matches_exact_address_and_domain_boundaries() -> None:
     assert "链接域名=portal.example.com" in context
     assert "发件域名=" not in context
 
+    message.text_body = "[https://login.portal.example.com](https://login.portal.example.com)"
+    assert "链接域名=portal.example.com" in client.trust_context(message)
+
     spoofed = make_message("notice@example.org.evil.test", "{}")
     spoofed.text_body = "https://portal.example.com.evil.test/"
     assert client.trust_context(spoofed) == "未命中本地信任参考名单"
