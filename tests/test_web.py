@@ -1,9 +1,14 @@
 import json
+import shutil
+import subprocess
 from datetime import UTC, datetime
 from email.message import EmailMessage
 from pathlib import Path
+from urllib.parse import unquote
 
+import pytest
 import yaml
+from bs4 import BeautifulSoup
 from fastapi.testclient import TestClient
 from pwdlib import PasswordHash
 
@@ -13,6 +18,52 @@ from inboxping.config import Settings
 from inboxping.mail.source_fetch import FetchedEml
 from inboxping.models import Analysis, Message, Notification
 from inboxping.web.app import create_app
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is needed to run the renderer")
+def test_markdown_autolinks_stop_at_chinese_punctuation() -> None:
+    cases = [
+        ("请访问 https://example.org/login，点击“忘记密码”并继续。", "https://example.org/login"),
+        ("详情见 https://example.org/page#section。", "https://example.org/page#section"),
+        ("请访问 https://example.org/中文?q=确认，继续。", "https://example.org/中文?q=确认"),
+        ("请访问 [详情，继续](https://example.org/中文，路径)。", "https://example.org/中文，路径"),
+    ]
+    script = """
+        const fs = require('node:fs');
+        const vm = require('node:vm');
+        const path = require('node:path');
+        const input = JSON.parse(fs.readFileSync(0, 'utf8'));
+        const context = vm.createContext({
+            window: {},
+            marked: require(path.join(input.root, 'vendor/marked/marked.umd.js')),
+        });
+        vm.runInContext(fs.readFileSync(path.join(input.root, 'message.js'), 'utf8'), context);
+        const html = input.sources.map(source => {
+            context.source = source;
+            return vm.runInContext('messageMarkdown.parse(source)', context);
+        });
+        process.stdout.write(JSON.stringify(html));
+    """
+    result = subprocess.run(
+        ["node", "-e", script],
+        input=json.dumps(
+            {
+                "root": str(Path(__file__).resolve().parents[1] / "src/inboxping/web/static"),
+                "sources": [source for source, _ in cases],
+            }
+        ),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    for html, (source, expected_url) in zip(json.loads(result.stdout), cases, strict=True):
+        soup = BeautifulSoup(html, "html.parser")
+        links = soup.find_all("a")
+        assert len(links) == 1
+        assert unquote(links[0]["href"]) == expected_url
+        if not source.startswith("请访问 ["):
+            assert links[0].get_text() == expected_url
+            assert soup.get_text().strip() == source
 
 
 def test_dashboard_and_health(tmp_path) -> None:

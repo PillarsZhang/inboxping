@@ -1,6 +1,13 @@
 const messageMarkdown = new marked.Marked({
   gfm: true,
   breaks: true,
+  tokenizer: {
+    url(src) {
+      // Bare URLs in Chinese text end at sentence punctuation.
+      const boundary = src.search(/[，。；：！？、“”‘’（）【】《》]/u);
+      return marked.Tokenizer.prototype.url.call(this, boundary < 0 ? src : src.slice(0, boundary));
+    },
+  },
   renderer: {
     html({ text }) {
       const element = document.createElement("div");
