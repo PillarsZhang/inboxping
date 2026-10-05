@@ -199,6 +199,14 @@ docker compose up -d --build
 docker compose logs -f --tail=200
 ```
 
+更新代码并重启服务：
+
+```bash
+./scripts/update.sh
+```
+
+脚本仅快进拉取当前分支，然后重建镜像并重新创建容器；任一步失败即停止。
+
 Compose 将 `config.yaml` 和 `prompts/` 只读挂载进容器，数据保存在 `./data`。镜像保持容器 UID `0`，在 rootless Docker 中会映射为宿主机当前普通用户，便于读写挂载数据。宿主机端口默认只绑定 `127.0.0.1`；需要远程访问时，请通过可信反向代理、Tailscale 或 Tunnel 提供 TLS 和访问控制。
 
 ## 安全生成界面截图

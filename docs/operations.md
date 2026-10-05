@@ -29,4 +29,6 @@ uv run inboxping notifications send wecom_app "这是一条通知"
 # 必须先停止服务；清空全部运行数据和邮箱游标
 uv run inboxping clear-data --yes
 docker compose logs -f --tail=200
+# 拉取最新代码并重建、重启服务
+./scripts/update.sh
 ```
