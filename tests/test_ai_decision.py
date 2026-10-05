@@ -63,7 +63,7 @@ def test_failed_ai_analysis_never_creates_push_decision(tmp_path) -> None:
         assert session.scalar(select(Event).where(Event.kind == "analysis_failed")) is not None
 
 
-def test_successful_ai_analysis_persists_scores_and_decision(tmp_path) -> None:
+def test_successful_ai_decision_pushes_without_action_or_deadline(tmp_path) -> None:
     settings = Settings(storage={"database_url": f"sqlite:///{tmp_path / 'test.db'}"})
     db = Database(settings)
     db.init()
@@ -78,18 +78,28 @@ def test_successful_ai_analysis_persists_scores_and_decision(tmp_path) -> None:
         return AnalyzedMessage(
             AnalysisResult(
                 title_zh="事项提醒",
-                summary_zh="请尽快处理",
+                summary_zh="事务已有新结果，无需操作",
                 category="administrative",
                 importance_score=0.8,
                 risk={"score": 0.1, "reason": "未发现异常"},
+                action_required=False,
+                deadline=None,
                 should_push=True,
-                push_reason="有明确期限",
+                push_reason="事务结果值得知晓",
             ),
             TokenUsage(prompt_tokens=123, completion_tokens=45),
         )
 
+    sent = []
+
+    async def send(current_id, **_kwargs):
+        sent.append(current_id)
+
     pipeline.ai.analyze = analyze  # type: ignore[method-assign]
-    asyncio.run(pipeline.process(message_id, notify=False))
+    pipeline.send_notification = send  # type: ignore[method-assign]
+    asyncio.run(pipeline.process(message_id))
+
+    assert sent == [message_id]
 
     with db.session() as session:
         message = session.get(Message, message_id)
@@ -97,7 +107,9 @@ def test_successful_ai_analysis_persists_scores_and_decision(tmp_path) -> None:
         assert message.analysis.importance_score == 0.8
         assert message.analysis.risk_score == 0.1
         assert message.analysis.should_push is True
-        assert message.analysis.push_reason == "有明确期限"
+        assert message.analysis.action_required is False
+        assert message.analysis.deadline is None
+        assert message.analysis.push_reason == "事务结果值得知晓"
         assert message.analysis.prompt_tokens == 123
         assert message.analysis.completion_tokens == 45
 
